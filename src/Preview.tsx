@@ -7,6 +7,7 @@ export function Preview({ opacity }: { opacity: number }) {
   const img = useStore(selectImage)
   const image = img?.bitmap
   const freeze = img?.freeze ?? null
+  const checker = useStore((s) => (img?.hasAlpha ?? false) && s.baseMm === 'none') // transparent pixels in the output: show a checkerboard behind them
   const params = useStore(useShallow(pickParams))
   const ref = useRef<HTMLCanvasElement>(null)
   const src = useRef<HTMLCanvasElement>(null)
@@ -34,7 +35,10 @@ export function Preview({ opacity }: { opacity: number }) {
 
   return (
     <div className="relative w-fit max-w-full">
-      <canvas ref={ref} className="block h-auto max-h-[50vh] w-auto max-w-full [image-rendering:pixelated]" />
+      <canvas
+        ref={ref}
+        className={`block h-auto max-h-[50vh] w-auto max-w-full [image-rendering:pixelated] ${checker ? 'bg-[length:16px_16px] bg-[position:0_0,8px_8px] bg-[image:linear-gradient(45deg,#ccc_25%,transparent_25%,transparent_75%,#ccc_75%),linear-gradient(45deg,#ccc_25%,transparent_25%,transparent_75%,#ccc_75%)] dark:bg-[image:linear-gradient(45deg,#555_25%,transparent_25%,transparent_75%,#555_75%),linear-gradient(45deg,#555_25%,transparent_25%,transparent_75%,#555_75%)]' : ''}`}
+      />
       <canvas ref={src} style={{ opacity }} className="pointer-events-none absolute inset-0 h-full w-full" />
     </div>
   )

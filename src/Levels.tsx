@@ -121,6 +121,7 @@ export function Levels() {
   const setParam = useStore((s) => s.setParam);
   const setLayers = useStore((s) => s.setLayers);
   const layers = thresholds.length + 1;
+  const depth = (k: number) => ((k + 1) * layerHeightMm).toFixed(2); // print depth of level k, as the select's option value
   const iconBtn = "h-6 w-6 rounded border border-gray-400 leading-none disabled:opacity-40";
 
   // Each section shows the gray its level prints as.
@@ -190,14 +191,13 @@ export function Levels() {
           right={
             <select
               aria-label="Base depth"
-              value={String(baseMm)}
-              onChange={(e) => { const v = e.target.value; setParam("baseMm", v === "level" || v === "none" ? v : Number(v)); }}
+              value={baseMm === "none" ? "none" : depth(Math.min(layers - 1, Math.max(0, Math.round(baseMm / layerHeightMm) - 1)))}
+              onChange={(e) => { const v = e.target.value; setParam("baseMm", v === "none" ? v : Number(v)); }}
               className="rounded border border-gray-300 bg-white px-2 py-0.5 dark:border-gray-600 dark:bg-gray-800"
             >
-              <option value="level">Level</option>
               <option value="none">None</option>
-              {Array.from({ length: 10 }, (_, i) => (0.15 + 0.5 * i).toFixed(2)).map((v) => (
-                <option key={v} value={Number(v)}>{v} mm</option>
+              {edges.slice(0, -1).map((_, k) => (
+                <option key={k} value={depth(k)}>{depth(k)} mm</option>
               ))}
             </select>
           }

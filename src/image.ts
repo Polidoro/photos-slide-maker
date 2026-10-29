@@ -321,8 +321,7 @@ function computeHeights(image: ImageBitmap, p: PipelineParams, freeze: Freeze | 
   heights = applyFreeze(heights, w, h, thresholds, freeze)
 
   // 5. Frame and convert to layer units (the mesher's field). A fixed base depth overrides the gray for transparent pixels.
-  const base = p.baseMm === 'level' ? undefined
-    : { mask: transparent, level: p.baseMm === 'none' ? -1 : Math.max(0, Math.round(p.baseMm / p.layerHeightMm) - 1) }
+  const base = { mask: transparent, level: p.baseMm === 'none' ? -1 : Math.max(0, Math.round(p.baseMm / p.layerHeightMm) - 1) }
   const { heights: framed, ...opts } = frameField(heights, w, h, { ...p, flipDepth }, base)
   return { heights: framed, w, h, opts }
 }

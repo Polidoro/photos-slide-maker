@@ -16,7 +16,7 @@ export type Params = {
   levelMin: number; levelMax: number // percent; intensity is rescaled into this range
   minFeatureMm: number // islands/holes narrower than this are removed from every layer; 0 = off
   background: number // percent gray that transparent pixels become; independent of invert and levels
-  baseMm: number | 'level' | 'none' // print depth of transparent pixels: a fixed mm value, 'level' = whatever `background` lands on, 'none' = cut out
+  baseMm: number | 'none' // print depth of transparent pixels in mm (snapped to a level), or 'none' = cut out; default one layer
   thresholds: number[] // percent, ascending, length layers-1
   layerHeightMm: number // printer layer height; one layer per colour level, the darkest being the base
   nozzleMm: number // nozzle width; grid pitch is half of it
@@ -26,7 +26,7 @@ export type Params = {
 export type Img = { id: number; bitmap: ImageBitmap; name: string; hasAlpha: boolean; freeze: Freeze | null }
 
 const respace = (layers: number) => Array.from({ length: layers - 1 }, (_, k) => Math.round(((k + 1) * 100) / layers))
-const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, background: 0, baseMm: 'level', thresholds: respace(4), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: false, frame: 'none' }
+const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, background: 0, baseMm: 0.15, thresholds: respace(4), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: false, frame: 'none' }
 const PARAM_KEYS = Object.keys(DEFAULTS) as (keyof Params)[]
 export const pickParams = (s: Params): Params => Object.fromEntries(PARAM_KEYS.map((k) => [k, s[k]])) as Params
 const FRAMES = ['none', 'flat', 'tapered', 'mixed']
@@ -38,7 +38,7 @@ export const isParams = (x: unknown): x is Params => {
     k === 'heightMm' ? o[k] === null || typeof o[k] === 'number'
     : k === 'thresholds' ? Array.isArray(o[k]) && (o[k] as unknown[]).every((t) => typeof t === 'number')
     : k === 'frame' ? FRAMES.includes(o[k] as string)
-    : k === 'baseMm' ? typeof o[k] === 'number' || o[k] === 'level' || o[k] === 'none'
+    : k === 'baseMm' ? typeof o[k] === 'number' || o[k] === 'none'
     : typeof o[k] === typeof DEFAULTS[k])
 }
 
@@ -132,6 +132,13 @@ export const useStore = create<State>()(
       }),
       {
         name: 'shademaker',
+        version: 1,
+        migrate: (persisted) => {
+          // v0 allowed baseMm: 'level'; it now defaults to one layer
+          const s = persisted as State
+          const fix = (p: Params) => ((p.baseMm as unknown) === 'level' ? { ...p, baseMm: p.layerHeightMm } : p)
+          return { ...fix(s), configs: Object.fromEntries(Object.entries(s.configs ?? {}).map(([k, v]) => [k, fix(v)])) }
+        },
         partialize: ({ images: _i, ...rest }) => rest, // params + index + configs + autogen; images (and their freeze) live in IndexedDB
       },
     ),
