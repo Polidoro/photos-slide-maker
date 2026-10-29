@@ -97,17 +97,20 @@ export function freezeLayerImage(f: Freeze, level: number, steps: number): Image
   return new ImageData(px, f.w, f.h)
 }
 
+export type BrushMode = 'erase' | 'add'
 /**
- * Eraser: pixels of `level` within radius r of (cx, cy) (freeze-grid coords) leave the level. They drop to the level
- * below if that is frozen too, otherwise back to the live pipeline. Returns a new Freeze (the pipeline memo is by reference).
+ * Round brush of radius r at (cx, cy) in freeze-grid coords on a frozen level. Erase: pixels of `level` drop to the
+ * level below if that is frozen too, otherwise back to the live pipeline. Add: every pixel under the brush becomes
+ * `level`, which also removes it from any higher level (one array, one level per pixel). Returns a new Freeze.
  */
-export function eraseFreeze(f: Freeze, level: number, cx: number, cy: number, r: number): Freeze {
-  const to = level - 1 >= f.from ? level - 1 : FREE
+export function brushFreeze(f: Freeze, level: number, cx: number, cy: number, r: number, mode: BrushMode): Freeze {
+  const add = mode === 'add'
+  const to = add ? level : level - 1 >= f.from ? level - 1 : FREE
   const levels = f.levels.slice()
   for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(f.h - 1, Math.ceil(cy + r)); y++)
     for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(f.w - 1, Math.ceil(cx + r)); x++) {
       const i = y * f.w + x
-      if (levels[i] === level && (x - cx) ** 2 + (y - cy) ** 2 <= r * r) levels[i] = to
+      if ((add || levels[i] === level) && (x - cx) ** 2 + (y - cy) ** 2 <= r * r) levels[i] = to
     }
   return { ...f, levels }
 }

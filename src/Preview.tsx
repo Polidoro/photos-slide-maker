@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/shallow";
-import { eraseFreeze, freezeLayerImage, quantizedImage, type Freeze } from "./image";
+import { brushFreeze, freezeLayerImage, quantizedImage, type BrushMode, type Freeze } from "./image";
 import { pickParams, selectEditLevel, selectImage, useStore } from "./store";
 
-export function Preview({ opacity, brush }: { opacity: number; brush: number }) {
+export function Preview({ opacity, brush, mode }: { opacity: number; brush: number; mode: BrushMode }) {
   const img = useStore(selectImage);
   const image = img?.bitmap;
   const freeze = img?.freeze ?? null;
@@ -51,7 +51,7 @@ export function Preview({ opacity, brush }: { opacity: number; brush: number }) 
     const f = stroke.current;
     if (!f || editLevel === null) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const next = eraseFreeze(f, editLevel, ((e.clientX - rect.left) / rect.width) * f.w, ((e.clientY - rect.top) / rect.height) * f.h, brush);
+    const next = brushFreeze(f, editLevel, ((e.clientX - rect.left) / rect.width) * f.w, ((e.clientY - rect.top) / rect.height) * f.h, brush, mode);
     stroke.current = next;
     e.currentTarget.getContext("2d")!.putImageData(freezeLayerImage(next, editLevel, params.thresholds.length), 0, 0);
   }
@@ -92,7 +92,7 @@ export function Preview({ opacity, brush }: { opacity: number; brush: number }) 
         className={`block h-auto max-h-[75vh] w-auto max-w-full [image-rendering:pixelated] ${editBg} ${checker ? "bg-[length:16px_16px] bg-[position:0_0,8px_8px] bg-[image:linear-gradient(45deg,#ccc_25%,transparent_25%,transparent_75%,#ccc_75%),linear-gradient(45deg,#ccc_25%,transparent_25%,transparent_75%,#ccc_75%)] dark:bg-[image:linear-gradient(45deg,#555_25%,transparent_25%,transparent_75%,#555_75%),linear-gradient(45deg,#555_25%,transparent_25%,transparent_75%,#555_75%)]" : ""}`}
       />
       {editLevel !== null && (
-        <div ref={cursor} className="pointer-events-none absolute hidden rounded-full border-2 border-red-500" />
+        <div ref={cursor} className={`pointer-events-none absolute hidden rounded-full border-2 ${mode === "add" ? "border-blue-500" : "border-red-500"}`} />
       )}
       <canvas
         ref={src}

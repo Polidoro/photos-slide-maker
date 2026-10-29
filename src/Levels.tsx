@@ -87,7 +87,7 @@ function Slider({
 }
 
 /** Small toggle chip under a slider section. Stops the pointer events so react-range doesn't start a drag. */
-function IconButton({
+export function IconButton({
   label,
   active,
   disabled,
