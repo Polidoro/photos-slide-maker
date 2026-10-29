@@ -3,17 +3,6 @@
 ## Goal
 A single-page web app that takes a grayscale (or color, converted to grayscale) image and produces a watertight binary STL where each pixel becomes a column whose height is proportional to its intensity. Everything runs in the browser. No server, no upload.
 
-## Stack
-- Vite + React 19 + TypeScript (`npm create vite@latest -- --template react-ts`)
-- Tailwind CSS v4 via `@tailwindcss/vite`
-- Zustand v5 for app state, with the `persist` middleware
-- react-range for the multi-handle levels control
-- react-tooltip for the slider help icons
-- cdt2d for triangulating terrace polygons
-- zundo for undo/redo of parameter changes
-- Vitest (dev dependency) for the one unit test
-- Any other useful runtime dependencies
-
 ## Features (in scope)
 1. **Load image**: `<input type="file" accept="image/*">` plus drag-and-drop onto the page. Decode with `createImageBitmap`, draw to an offscreen canvas, read pixels with `getImageData`. Alpha is ignored during processing (RGB is used as decoded). After all processing, pixels with alpha below 50% are set to the Background gray, independent of Invert and the levels range.
 2. **Grayscale conversion**: luminance `0.299 r + 0.587 g + 0.114 b`, normalized to 0..1.
@@ -34,7 +23,7 @@ A single-page web app that takes a grayscale (or color, converted to grayscale) 
 4. **Preview**: 2D canvas showing the downsampled, quantized grayscale image. Fills the panel width with `image-rendering: pixelated`. No 3D preview.
 5. **Export**: "Download STL" button. Generates binary STL and triggers a download named `<original-name-without-extension>.stl`.
 6. **Stats line**: triangle count and file size of the current mesh. The mesh is rebuilt (debounced) when the image changes or when zundo records, undoes or redoes a parameter change, so never mid-drag and never for a no-op change; it is cached for download.
-7. **Persistence**: parameters are kept per image (`configs`, keyed by image id; the top-level params mirror the current image's and switching images loads its saved config or the defaults and clears undo history) and persist with the selected index via Zustand `persist` (localStorage). "Copy State" / "Load State" buttons move the current params through the clipboard as JSON, validated by `isParams`. A "Source Opacity" slider on the file-name row overlays the original image (not persisted). The preview is capped at 50% of the viewport height. Each section of the Levels slider is captioned with its print depth, `(level+1) × layerHeight`. Tone sliders (Contrast, Saturation as canvas filters; Lightness, Gamma, Shadows, Highlights via `tone()` in `image.ts`) run before the gray conversion and levels. Each Levels section has a padlock: locking freezes that level and every level above (`Freeze` = `from` + a per-pixel level array at capture grid size, stored on the image record in IndexedDB; `captureFreeze`/`thawLowest`/`applyFreeze` in `image.ts`). Frozen pixels keep their level whatever the sliders do; live pixels landing in a frozen level drop to the highest unfrozen one. Unlock releases only the lowest frozen level. Changing the layer count clears the freeze. An Autogenerate checkbox under Download STL (persisted, default on) controls whether the mesh rebuilds after every change; when off the button reads "Generate STL" and builds on click. A "Flip Depth" checkbox beside Autogenerate (`flipDepth`, per image, default off) mirrors the image levels in `frameField` for the STL build only, so black prints highest; frame, base, boundaries, preview and PNG are unchanged. Dropping an image anywhere in the window adds it as a new image, even when one is loaded. Uploaded files persist as blobs in IndexedDB (`src/db.ts`) and are re-decoded on startup, so the image list survives a refresh.
+7. **Persistence**: parameters are kept per image (`configs`, keyed by image id; the top-level params mirror the current image's and switching images loads its saved config or the defaults and clears undo history) and persist with the selected index via Zustand `persist` (localStorage). "Copy State" / "Load State" buttons move the current params through the clipboard as JSON, validated by `isParams`. A "Source Opacity" slider on the file-name row overlays the original image (not persisted). The preview is capped at 75% of the viewport height. Each section of the Levels slider is captioned with its print depth, `(level+1) × layerHeight`. Tone sliders (Contrast, Saturation as canvas filters; Lightness, Gamma, Shadows, Highlights via `tone()` in `image.ts`) run before the gray conversion and levels. Each Levels section has a padlock and a pencil, always shown. Locking any unlocked level freezes it and every level above it (`Freeze` = `from` + a per-pixel level array at capture grid size, stored on the image record in IndexedDB; `captureFreeze`/`thawLowest`/`applyFreeze` in `image.ts`). Frozen pixels keep their level whatever the sliders do; live pixels landing in a frozen level drop to the highest unfrozen one. Unlock releases only the lowest frozen level. The pencil (off by default) locks the level first if needed, then swaps the preview for that frozen level alone, drawn from the freeze array over a green background (light green for levels below the midpoint, dark green above) (`editLevel`, UI state only, cleared on image switch); clicking again restores the normal preview. While a layer is shown, the Source Opacity slider is replaced by "Erase" (radius 1..10 cells, default 4): dragging on the preview erases the layer under a round brush, shown as a red ring the size of the erase area; erased pixels drop to the level below if that is frozen, else return to the live pipeline (`eraseFreeze`). Each stroke is one freeze write and one entry in a stroke history (`strokes`, UI only, cleared by any lock/thaw or image switch); while a layer is being edited, Cmd/Ctrl+Z and Shift+Z / Y undo and redo strokes instead of params. Changing the layer count clears the freeze. An Autogenerate checkbox under Download STL (persisted, default on) controls whether the mesh rebuilds after every change; when off the button reads "Generate STL" and builds on click. A "Flip Depth" checkbox beside Autogenerate (`flipDepth`, per image, default off) mirrors the image levels in `frameField` for the STL build only, so black prints highest; frame, base, boundaries, preview and PNG are unchanged. Dropping an image anywhere in the window adds it as a new image, even when one is loaded. Uploaded files persist as blobs in IndexedDB (`src/db.ts`) and are re-decoded on startup, so the image list survives a refresh.
 8. **Undo/redo**: zundo `temporal` middleware tracks only the parameters (the state that triggers an STL build), up to 100 steps, deduplicating identical states. History is paused while a slider is dragged; on release one entry (the pre-drag state) is added if anything changed. Keyboard only: Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z and Ctrl+Y (ignored while focus is in a text input).
 9. **Image history**: every loaded image stays in a left sidebar with thumbnails; click to select, trash icon to remove, "+ NEW" returns to the drop zone. A Reset (parameters to defaults) sits above the controls.
 
@@ -66,16 +55,7 @@ One Zustand store:
   addImage(file); hydrate(); select(i); remove(i); clear(); reset(); setLayers(n); setParam<K>(key: K, value: Params[K]);
 }
 ```
-Wrapped in `temporal` (params only) and `persist` with `partialize` so parameters and `index` are stored; `images` are rebuilt from IndexedDB by `hydrate()` on mount. Components select one field per `useStore` call. No selector returns a fresh object.
-
-## Components (`src/`)
-- `App.tsx`: layout, drop zone wiring.
-- `Controls.tsx`: the parameter inputs plus the download button and stats line. Hovering a slider label shows a react-tooltip explaining what it does.
-- `Levels.tsx`: the Range and Levels sliders, rendered under the preview for width.
-- `Preview.tsx`: canvas that redraws (one-frame throttled) when the image or any parameter changes. Exposes nothing; the export path recomputes heights itself via a shared `sampleHeights(image, params)` helper in `src/image.ts`.
-- `image.ts`: `sampleHeights` returns `{ heights, w, h, opts }` (`opts` are the mesher options from `frameField`), memoized on (image, params) so the preview and the STL build share one pipeline run. `quantizedImage` renders it to pixels; `fit` is the shared long-edge scaling.
-- `download.ts`: `downloadBlob(buf, name)`.
-- `db.ts`: `putImage`, `deleteImage`, `allImages` over one IndexedDB object store.
+Wrapped in `temporal` (params only) and `persist` with `partialize` so parameters and `index` are stored; `images` are rebuilt from IndexedDB by `hydrate()` on mount. Components select one field per `useStore` call, or the whole param set via `useShallow(pickParams)`.
 
 ## UX
 - Empty state: large dashed drop zone with "Drop an image or click to choose".

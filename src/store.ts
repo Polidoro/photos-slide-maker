@@ -47,8 +47,14 @@ type State = Params & {
   index: number
   configs: Record<number, Params> // params per image id; the top-level params mirror configs[current image]
   autogen: boolean // rebuild the STL automatically after each change
+  editLevel: number | null // frozen level shown alone in the preview (pencil toggle); UI only
+  setEditLevel: (k: number | null) => void
   setAutogen: (b: boolean) => void
-  setFreeze: (f: Freeze | null) => void // on the current image; also written to IndexedDB
+  setFreeze: (f: Freeze | null) => void // on the current image; also written to IndexedDB. Clears stroke history.
+  strokes: { past: Freeze[]; future: Freeze[] } // undo/redo for eraser strokes on the current image; UI only
+  commitStroke: (f: Freeze) => void // setFreeze that records the previous freeze for undo
+  undoStroke: () => void
+  redoStroke: () => void
   setDragging: (b: boolean) => void // pauses undo history while a slider is dragged
   addImage: (file: File) => Promise<void>
   hydrate: () => Promise<void>
@@ -66,11 +72,12 @@ type State = Params & {
 const LIMIT = 100
 let dragStart: Params | null = null
 const same = (a: Params, b: Params) => JSON.stringify(a) === JSON.stringify(b)
+const NO_STROKES = { past: [], future: [] }
 // Switch to another image: load its saved params (or defaults) and drop undo history, which belongs to the old image.
 const swap = (s: Pick<State, 'images' | 'configs'>, index: number) => {
   const id = s.images[index]?.id
   queueMicrotask(() => useStore.temporal.getState().clear())
-  return { index, ...((id !== undefined && s.configs[id]) || DEFAULTS) }
+  return { index, editLevel: null, strokes: NO_STROKES, ...((id !== undefined && s.configs[id]) || DEFAULTS) }
 }
 
 export const useStore = create<State>()(
@@ -82,12 +89,33 @@ export const useStore = create<State>()(
         index: -1,
         configs: {},
         autogen: true,
+        editLevel: null,
+        setEditLevel: (editLevel) => set({ editLevel }),
         setAutogen: (autogen) => set({ autogen }),
         setFreeze: (freeze) => {
           const img = get().images[get().index]
           if (!img) return
           patchImage(img.id, { freeze })
-          set((s) => ({ images: s.images.map((i) => (i.id === img.id ? { ...i, freeze } : i)) }))
+          set((s) => ({ images: s.images.map((i) => (i.id === img.id ? { ...i, freeze } : i)), strokes: NO_STROKES }))
+        },
+        strokes: NO_STROKES,
+        commitStroke: (f) => {
+          const prev = get().images[get().index]?.freeze
+          const { past } = get().strokes
+          get().setFreeze(f)
+          if (prev) set({ strokes: { past: [...past, prev].slice(-LIMIT), future: [] } })
+        },
+        undoStroke: () => {
+          const { past, future } = get().strokes, cur = get().images[get().index]?.freeze
+          if (!past.length || !cur) return
+          get().setFreeze(past[past.length - 1])
+          set({ strokes: { past: past.slice(0, -1), future: [...future, cur] } })
+        },
+        redoStroke: () => {
+          const { past, future } = get().strokes, cur = get().images[get().index]?.freeze
+          if (!future.length || !cur) return
+          get().setFreeze(future[future.length - 1])
+          set({ strokes: { past: [...past, cur], future: future.slice(0, -1) } })
         },
         setDragging: (b) => {
           const t = useStore.temporal
@@ -139,7 +167,7 @@ export const useStore = create<State>()(
           const fix = (p: Params) => ((p.baseMm as unknown) === 'level' ? { ...p, baseMm: p.layerHeightMm } : p)
           return { ...fix(s), configs: Object.fromEntries(Object.entries(s.configs ?? {}).map(([k, v]) => [k, fix(v)])) }
         },
-        partialize: ({ images: _i, ...rest }) => rest, // params + index + configs + autogen; images (and their freeze) live in IndexedDB
+        partialize: ({ images: _i, editLevel: _e, strokes: _s, ...rest }) => rest, // params + index + configs + autogen; images (and their freeze) live in IndexedDB
       },
     ),
     { limit: LIMIT, partialize: pickParams, equality: same },
@@ -153,3 +181,8 @@ useStore.subscribe((s, prev) => {
 })
 
 export const selectImage = (s: State): Img | undefined => s.images[s.index]
+/** The level the pencil is showing, or null if none or it has since been unlocked. */
+export const selectEditLevel = (s: State): number | null => {
+  const f = selectImage(s)?.freeze
+  return s.editLevel !== null && f && s.editLevel >= f.from ? s.editLevel : null
+}

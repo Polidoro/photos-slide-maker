@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStore as useZustand } from "zustand";
+import { useShallow } from "zustand/shallow";
 import { Tooltip } from "react-tooltip";
 import "react-tooltip/dist/react-tooltip.css";
 import { downloadBlob } from "./download";
@@ -80,30 +81,13 @@ function MmInput({ value, onCommit }: { value: number; onCommit: (v: number) => 
 export function Controls() {
   const img = useStore(selectImage);
   const reset = useStore((s) => s.reset);
-  const contrast = useStore((s) => s.contrast);
-  const saturation = useStore((s) => s.saturation);
-  const lightness = useStore((s) => s.lightness);
-  const gamma = useStore((s) => s.gamma);
-  const shadows = useStore((s) => s.shadows);
-  const highlights = useStore((s) => s.highlights);
-  const median = useStore((s) => s.median);
-  const bilateral = useStore((s) => s.bilateral);
-  const smoothing = useStore((s) => s.smoothing);
-  const edgeTolerance = useStore((s) => s.edgeTolerance);
-  const hysteresis = useStore((s) => s.hysteresis);
-  const widthMm = useStore((s) => s.widthMm);
-  const heightMm = useStore((s) => s.heightMm);
-  const minFeatureMm = useStore((s) => s.minFeatureMm);
-  const layerHeightMm = useStore((s) => s.layerHeightMm);
-  const nozzleMm = useStore((s) => s.nozzleMm);
-  const frame = useStore((s) => s.frame);
+  const { contrast, saturation, lightness, gamma, shadows, highlights, median, bilateral, smoothing, edgeTolerance, hysteresis, widthMm, heightMm, minFeatureMm, layerHeightMm, nozzleMm, frame, flipDepth } = useStore(useShallow(pickParams));
   const setParam = useStore((s) => s.setParam);
   const setParams = useStore((s) => s.setParams);
   // zundo's history arrays change exactly when a tracked param change is recorded, undone or redone.
   const past = useZustand(useStore.temporal, (t) => t.pastStates);
   const future = useZustand(useStore.temporal, (t) => t.futureStates);
   const autogen = useStore((s) => s.autogen);
-  const flipDepth = useStore((s) => s.flipDepth);
   const setAutogen = useStore((s) => s.setAutogen);
   const [stl, setStl] = useState<ArrayBuffer | null>(null);
 

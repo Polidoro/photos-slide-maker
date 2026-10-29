@@ -72,7 +72,10 @@ function Slider({
             <span
               key={k}
               className="absolute inset-y-0 flex items-center justify-center gap-1 overflow-hidden whitespace-nowrap"
-              style={{ left: `${edges[k]}%`, width: `${edges[k + 1] - edges[k]}%` }}
+              style={{
+                left: `${edges[k]}%`,
+                width: `${edges[k + 1] - edges[k]}%`,
+              }}
             >
               {t}
             </span>
@@ -83,23 +86,41 @@ function Slider({
   );
 }
 
-/** Padlock toggle inside a slider section. Stops the pointer events so react-range doesn't start a drag. */
-function LockButton({ locked, disabled, onClick }: { locked: boolean; disabled: boolean; onClick: () => void }) {
+/** Small toggle chip under a slider section. Stops the pointer events so react-range doesn't start a drag. */
+function IconButton({
+  label,
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode; // svg contents, 24x24 viewBox
+}) {
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <button
-      aria-label={locked ? "Unlock layer" : "Lock layer"}
-      aria-pressed={locked}
+      aria-label={label}
+      aria-pressed={active}
       disabled={disabled}
       onPointerDown={stop}
       onMouseDown={stop}
       onTouchStart={stop}
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className={`pointer-events-auto shrink-0 disabled:opacity-20 ${locked ? "" : "opacity-50"}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`pointer-events-auto shrink-0 rounded border p-0.5 disabled:opacity-30 ${
+        active
+          ? "border-blue-600 bg-blue-600 text-white"
+          : "border-gray-400 bg-white text-gray-700 dark:border-gray-500 dark:bg-gray-800 dark:text-gray-200"
+      }`}
     >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill={locked ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
-        <rect x="4" y="11" width="16" height="10" rx="2" />
-        <path d={locked ? "M8 11V7a4 4 0 0 1 8 0v4" : "M8 11V7a4 4 0 0 1 7.5-2"} />
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        {children}
       </svg>
     </button>
   );
@@ -118,11 +139,14 @@ export function Levels() {
   const hasAlpha = image?.hasAlpha ?? false;
   const freeze = image?.freeze ?? null;
   const setFreeze = useStore((s) => s.setFreeze);
+  const editLevel = useStore((s) => s.editLevel);
+  const setEditLevel = useStore((s) => s.setEditLevel);
   const setParam = useStore((s) => s.setParam);
   const setLayers = useStore((s) => s.setLayers);
   const layers = thresholds.length + 1;
   const depth = (k: number) => ((k + 1) * layerHeightMm).toFixed(2); // print depth of level k, as the select's option value
-  const iconBtn = "h-6 w-6 rounded border border-gray-400 leading-none disabled:opacity-40";
+  const iconBtn =
+    "h-6 w-6 rounded border border-gray-400 leading-none disabled:opacity-40";
 
   // Each section shows the gray its level prints as.
   const edges = [0, ...thresholds, 100];
@@ -161,24 +185,55 @@ export function Levels() {
           // Everything from `from` up is frozen. Lock extends the run down one level; unlock releases only its lowest level.
           const from = freeze?.from ?? layers;
           const locked = k >= from;
+          // Locking level k pins it and every level above it (captureFreeze takes all levels >= k from the composited output).
+          const lock = () => setFreeze(captureFreeze(image!.bitmap, pickParams(useStore.getState()), freeze, k));
           return (
             <>
               {((flipDepth ? layers - k : k + 1) * layerHeightMm).toFixed(2)} mm
-              <LockButton
-                locked={locked}
-                disabled={!image || (locked ? k !== from : k !== from - 1)}
-                onClick={() =>
-                  setFreeze(locked ? thawLowest(freeze!, layers) : captureFreeze(image!.bitmap, pickParams(useStore.getState()), freeze, k))
-                }
-              />
+              <IconButton
+                label={locked ? "Unlock layer" : "Lock this layer and those above"}
+                active={locked}
+                disabled={!image || (locked && k !== from)} // unlock releases only the lowest frozen level
+                onClick={() => (locked ? setFreeze(thawLowest(freeze!, layers)) : lock())}
+              >
+                <rect x="4" y="11" width="16" height="10" rx="2" fill={locked ? "currentColor" : "none"} />
+                <path d={locked ? "M8 11V7a4 4 0 0 1 8 0v4" : "M8 11V7a4 4 0 0 1 7.5-2"} />
+              </IconButton>
+              <IconButton
+                label={editLevel === k ? "Show full preview" : "Edit this layer"}
+                active={editLevel === k}
+                disabled={!image}
+                onClick={() => {
+                  if (editLevel === k) return setEditLevel(null);
+                  if (!locked) lock();
+                  setEditLevel(k);
+                }}
+              >
+                <path d="M17 3l4 4L8 20H4v-4L17 3z" />
+                <path d="M14 6l4 4" />
+              </IconButton>
             </>
           );
         })}
         right={
           <span className="flex items-center gap-1">
             {layers} layers
-            <button aria-label="Fewer layers" className={iconBtn} disabled={layers <= 2} onClick={() => setLayers(layers - 1)}>−</button>
-            <button aria-label="More layers" className={iconBtn} disabled={layers >= 12} onClick={() => setLayers(layers + 1)}>+</button>
+            <button
+              aria-label="Fewer layers"
+              className={iconBtn}
+              disabled={layers <= 2}
+              onClick={() => setLayers(layers - 1)}
+            >
+              −
+            </button>
+            <button
+              aria-label="More layers"
+              className={iconBtn}
+              disabled={layers >= 12}
+              onClick={() => setLayers(layers + 1)}
+            >
+              +
+            </button>
           </span>
         }
       />
@@ -191,13 +246,27 @@ export function Levels() {
           right={
             <select
               aria-label="Base depth"
-              value={baseMm === "none" ? "none" : depth(Math.min(layers - 1, Math.max(0, Math.round(baseMm / layerHeightMm) - 1)))}
-              onChange={(e) => { const v = e.target.value; setParam("baseMm", v === "none" ? v : Number(v)); }}
+              value={
+                baseMm === "none"
+                  ? "none"
+                  : depth(
+                      Math.min(
+                        layers - 1,
+                        Math.max(0, Math.round(baseMm / layerHeightMm) - 1),
+                      ),
+                    )
+              }
+              onChange={(e) => {
+                const v = e.target.value;
+                setParam("baseMm", v === "none" ? v : Number(v));
+              }}
               className="rounded border border-gray-300 bg-white px-2 py-0.5 dark:border-gray-600 dark:bg-gray-800"
             >
               <option value="none">None</option>
               {edges.slice(0, -1).map((_, k) => (
-                <option key={k} value={depth(k)}>{depth(k)} mm</option>
+                <option key={k} value={depth(k)}>
+                  {depth(k)} mm
+                </option>
               ))}
             </select>
           }

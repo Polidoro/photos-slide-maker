@@ -1,6 +1,6 @@
 // Minimal IndexedDB store for uploaded image files, so the image list survives a refresh.
 import type { Freeze } from './image'
-export type ImageRecord = { id: number; name: string; blob: Blob; freeze?: Freeze | null }
+type ImageRecord = { id: number; name: string; blob: Blob; freeze?: Freeze | null }
 
 let db: Promise<IDBDatabase> | undefined
 function open() {

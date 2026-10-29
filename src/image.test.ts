@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { bilateralField, frameField, hysteresisMask, levelOf, medianField, removeSmall, thawLowest, thresholdsOf, tone } from './image'
+import { bilateralField, frameField, hysteresisMask, levelOf, medianField, eraseFreeze, removeSmall, thawLowest, thresholdsOf, tone } from './image'
 
 test('median removes a speck and keeps a hard edge', () => {
   const w = 9, h = 9
@@ -106,4 +106,12 @@ test('flipDepth mirrors image levels but not the frame', () => {
   expect(levelOf(heights[12], thresholds)).toBe(1) // dark -> top image level
   expect(levelOf(heights[6], thresholds)).toBe(0) // light interior -> bottom
   expect(levelOf(heights[0], thresholds)).toBe(1) // 1 mm frame at 0.5 mm layers is level 1 either way
+})
+
+test('eraseFreeze drops pixels to the frozen level below, or frees them', () => {
+  const f = { from: 1, w: 3, h: 1, levels: Uint8Array.from([2, 2, 1]) }
+  expect(Array.from(eraseFreeze(f, 2, 0, 0, 0.5).levels)).toEqual([1, 2, 1]) // level 1 is frozen: drop to it
+  expect(Array.from(eraseFreeze(f, 1, 2, 0, 0.5).levels)).toEqual([2, 2, 255]) // nothing frozen below: free
+  expect(Array.from(eraseFreeze(f, 2, 0, 0, 5).levels)).toEqual([1, 1, 1]) // big brush, only level-2 pixels change
+  expect(f.levels[0]).toBe(2) // input untouched
 })

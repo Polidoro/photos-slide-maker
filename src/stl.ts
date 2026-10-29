@@ -1,6 +1,7 @@
 import cdt2d from 'cdt2d'
+import { levelOf } from './image'
 
-export type Opts = { widthMm: number; heightMm?: number; maxHeightMm: number; baseMm: number; thresholds: number[] } // thresholds ascending, 0..1; heightMm defaults to the grid aspect
+type Opts = { widthMm: number; heightMm?: number; maxHeightMm: number; baseMm: number; thresholds: number[] } // thresholds ascending, 0..1; heightMm defaults to the grid aspect
 
 type V = { x: number; y: number; v: number; e: number; k: number } // e: original edge index of outgoing edge, -1 = chord at threshold k
 
@@ -14,14 +15,13 @@ type V = { x: number; y: number; v: number; e: number; k: number } // e: origina
  * vertices, walls and border bands; their outline edges are chained into rings per level and each
  * terrace is triangulated once as a polygon with holes (earcut), so flat areas cost no triangles.
  */
-export function buildMesh(heights: Float32Array, w: number, h: number, { widthMm, heightMm, maxHeightMm, baseMm, thresholds }: Opts): number[] {
+function buildMesh(heights: Float32Array, w: number, h: number, { widthMm, heightMm, maxHeightMm, baseMm, thresholds }: Opts): number[] {
   const steps = thresholds.length
   const s = widthMm / (w - 1)
   const sy = heightMm ? heightMm / (h - 1) : s
   const zOf = (k: number) => (k < 0 ? 0 : baseMm + (k * maxHeightMm) / steps)
   const thr = (k: number) => thresholds[k - 1] // boundary between level k-1 and k
-  const levels = Uint8Array.from(heights, (v) => { let n = 0; for (const t of thresholds) if (v >= t) n++; return n })
-  const lvl = (i: number) => levels[i]
+  const levels = Uint8Array.from(heights, (v) => levelOf(v, thresholds))
   const X = (i: number) => (i % w) * s
   const Y = (i: number) => (h - 1 - Math.floor(i / w)) * sy // image top at +Y so the print is not mirrored
   const out: number[] = []
@@ -62,7 +62,7 @@ export function buildMesh(heights: Float32Array, w: number, h: number, { widthMm
     const edges: [number, number][] = [[i0, i1], [i1, i2], [i2, i0]]
     const boundary = [b0, b1, b2]
     let poly: V[] = [i0, i1, i2].map((i, e) => ({ x: X(i), y: Y(i), v: heights[i], e, k: 0 }))
-    const lo = Math.min(lvl(i0), lvl(i1), lvl(i2)), hi = Math.max(lvl(i0), lvl(i1), lvl(i2))
+    const lo = Math.min(levels[i0], levels[i1], levels[i2]), hi = Math.max(levels[i0], levels[i1], levels[i2])
     for (let k = lo; k <= hi; k++) {
       const region = k < hi ? clip(poly, edges, k + 1, false) : poly
       if (k < hi) poly = clip(poly, edges, k + 1, true)
@@ -140,7 +140,7 @@ export function buildStl(heights: Float32Array, w: number, h: number, opts: Opts
  * so nested rings, holes and touching lobes need no special handling. Returns [ax, ay, bx, by, cx, cy] per triangle
  * with the same winding as the input edges.
  */
-export function triangulate(edges: number[]): number[][] {
+function triangulate(edges: number[]): number[][] {
   if (!edges.length) return []
   const index = new Map<string, number>()
   const points: [number, number][] = []

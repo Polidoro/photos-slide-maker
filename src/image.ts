@@ -89,6 +89,29 @@ export function captureFreeze(image: ImageBitmap, params: PipelineParams, curren
   return { from, w, h, levels }
 }
 
+/** One frozen level as pixels: its gray where the freeze pins that level, transparent elsewhere. */
+export function freezeLayerImage(f: Freeze, level: number, steps: number): ImageData {
+  const px = new Uint8ClampedArray(f.w * f.h * 4)
+  const v = Math.round((level / steps) * 255)
+  for (let i = 0; i < f.levels.length; i++) if (f.levels[i] === level) px.set([v, v, v, 255], 4 * i)
+  return new ImageData(px, f.w, f.h)
+}
+
+/**
+ * Eraser: pixels of `level` within radius r of (cx, cy) (freeze-grid coords) leave the level. They drop to the level
+ * below if that is frozen too, otherwise back to the live pipeline. Returns a new Freeze (the pipeline memo is by reference).
+ */
+export function eraseFreeze(f: Freeze, level: number, cx: number, cy: number, r: number): Freeze {
+  const to = level - 1 >= f.from ? level - 1 : FREE
+  const levels = f.levels.slice()
+  for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(f.h - 1, Math.ceil(cy + r)); y++)
+    for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(f.w - 1, Math.ceil(cx + r)); x++) {
+      const i = y * f.w + x
+      if (levels[i] === level && (x - cx) ** 2 + (y - cy) ** 2 <= r * r) levels[i] = to
+    }
+  return { ...f, levels }
+}
+
 /** Release the lowest frozen level; null once nothing is left frozen. */
 export function thawLowest(f: Freeze, layers: number): Freeze | null {
   const from = f.from + 1
