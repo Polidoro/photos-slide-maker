@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { temporal } from 'zundo'
-import { allImages, deleteImage, putImage } from './db'
-import { hasAlpha, type Locks } from './image'
+import { allImages, deleteImage, patchImage, putImage } from './db'
+import { type Freeze, hasAlpha } from './image'
 
 export type Params = {
   contrast: number; saturation: number // -100..100, applied as canvas filters before the gray conversion
@@ -16,15 +16,17 @@ export type Params = {
   levelMin: number; levelMax: number // percent; intensity is rescaled into this range
   minFeatureMm: number // islands/holes narrower than this are removed from every layer; 0 = off
   background: number // percent gray that transparent pixels become; independent of invert and levels
+  baseMm: number | 'level' | 'none' // print depth of transparent pixels: a fixed mm value, 'level' = whatever `background` lands on, 'none' = cut out
   thresholds: number[] // percent, ascending, length layers-1
   layerHeightMm: number // printer layer height; one layer per colour level, the darkest being the base
   nozzleMm: number // nozzle width; grid pitch is half of it
+  flipDepth: boolean // STL only: black prints highest and white lowest; preview, PNG and boundaries are unchanged
   frame: 'none' | 'flat' | 'tapered' | 'mixed' // 1 mm border; flat = 1 mm high, tapered = 1 mm down to one layer at the edge, mixed = flat sides, tapered top/bottom
 }
-export type Img = { id: number; bitmap: ImageBitmap; name: string; hasAlpha: boolean }
+export type Img = { id: number; bitmap: ImageBitmap; name: string; hasAlpha: boolean; freeze: Freeze | null }
 
 const respace = (layers: number) => Array.from({ length: layers - 1 }, (_, k) => Math.round(((k + 1) * 100) / layers))
-const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, background: 0, thresholds: respace(4), layerHeightMm: 0.15, nozzleMm: 0.4, frame: 'none' }
+const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, background: 0, baseMm: 'level', thresholds: respace(4), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: false, frame: 'none' }
 const PARAM_KEYS = Object.keys(DEFAULTS) as (keyof Params)[]
 export const pickParams = (s: Params): Params => Object.fromEntries(PARAM_KEYS.map((k) => [k, s[k]])) as Params
 const FRAMES = ['none', 'flat', 'tapered', 'mixed']
@@ -36,6 +38,7 @@ export const isParams = (x: unknown): x is Params => {
     k === 'heightMm' ? o[k] === null || typeof o[k] === 'number'
     : k === 'thresholds' ? Array.isArray(o[k]) && (o[k] as unknown[]).every((t) => typeof t === 'number')
     : k === 'frame' ? FRAMES.includes(o[k] as string)
+    : k === 'baseMm' ? typeof o[k] === 'number' || o[k] === 'level' || o[k] === 'none'
     : typeof o[k] === typeof DEFAULTS[k])
 }
 
@@ -43,8 +46,9 @@ type State = Params & {
   images: Img[]
   index: number
   configs: Record<number, Params> // params per image id; the top-level params mirror configs[current image]
-  locks: Locks // frozen layer masks for the current image, by level; in memory only, cleared on image switch or layer-count change
-  setLock: (level: number, mask: ImageBitmap | undefined) => void
+  autogen: boolean // rebuild the STL automatically after each change
+  setAutogen: (b: boolean) => void
+  setFreeze: (f: Freeze | null) => void // on the current image; also written to IndexedDB
   setDragging: (b: boolean) => void // pauses undo history while a slider is dragged
   addImage: (file: File) => Promise<void>
   hydrate: () => Promise<void>
@@ -66,7 +70,7 @@ const same = (a: Params, b: Params) => JSON.stringify(a) === JSON.stringify(b)
 const swap = (s: Pick<State, 'images' | 'configs'>, index: number) => {
   const id = s.images[index]?.id
   queueMicrotask(() => useStore.temporal.getState().clear())
-  return { index, locks: [] as Locks, ...((id !== undefined && s.configs[id]) || DEFAULTS) }
+  return { index, ...((id !== undefined && s.configs[id]) || DEFAULTS) }
 }
 
 export const useStore = create<State>()(
@@ -77,8 +81,14 @@ export const useStore = create<State>()(
         images: [],
         index: -1,
         configs: {},
-        locks: [],
-        setLock: (level, mask) => set((s) => { const locks = s.locks.slice(); locks[level] = mask; return { locks } }),
+        autogen: true,
+        setAutogen: (autogen) => set({ autogen }),
+        setFreeze: (freeze) => {
+          const img = get().images[get().index]
+          if (!img) return
+          patchImage(img.id, { freeze })
+          set((s) => ({ images: s.images.map((i) => (i.id === img.id ? { ...i, freeze } : i)) }))
+        },
         setDragging: (b) => {
           const t = useStore.temporal
           if (b && !dragStart) {
@@ -96,11 +106,11 @@ export const useStore = create<State>()(
           const rec = { id: Date.now(), name: file.name, blob: file }
           const bitmap = await createImageBitmap(file)
           await putImage(rec)
-          set((s) => { const images = [...s.images, { id: rec.id, bitmap, name: rec.name, hasAlpha: hasAlpha(bitmap) }]; return { images, ...swap({ ...s, images }, s.images.length) } })
+          set((s) => { const images = [...s.images, { id: rec.id, bitmap, name: rec.name, hasAlpha: hasAlpha(bitmap), freeze: null }]; return { images, ...swap({ ...s, images }, s.images.length) } })
         },
         hydrate: async () => {
           const recs = await allImages()
-          const images = await Promise.all(recs.map(async (r) => { const bitmap = await createImageBitmap(r.blob); return { id: r.id, name: r.name, bitmap, hasAlpha: hasAlpha(bitmap) } }))
+          const images = await Promise.all(recs.map(async (r) => { const bitmap = await createImageBitmap(r.blob); return { id: r.id, name: r.name, bitmap, hasAlpha: hasAlpha(bitmap), freeze: r.freeze ?? null } }))
           set((s) => ({ images, ...swap({ ...s, images }, Math.min(s.index, images.length - 1)) }))
         },
         select: (index) => set((s) => swap(s, index)),
@@ -117,12 +127,12 @@ export const useStore = create<State>()(
         clear: () => set((s) => swap(s, -1)),
         reset: () => set(DEFAULTS),
         setParams: (p) => set(pickParams(p)),
-        setLayers: (n) => set({ thresholds: respace(n), locks: [] }),
+        setLayers: (n) => { set({ thresholds: respace(n) }); get().setFreeze(null) }, // level indices change meaning, so a freeze can't carry over
         setParam: (key, value) => set({ [key]: value }),
       }),
       {
         name: 'shademaker',
-        partialize: ({ images: _i, locks: _l, ...rest }) => rest, // params + index + configs; images live in IndexedDB, locks in memory
+        partialize: ({ images: _i, ...rest }) => rest, // params + index + configs + autogen; images (and their freeze) live in IndexedDB
       },
     ),
     { limit: LIMIT, partialize: pickParams, equality: same },

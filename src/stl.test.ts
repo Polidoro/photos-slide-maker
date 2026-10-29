@@ -32,8 +32,8 @@ function check(buf: ArrayBuffer) {
 }
 
 test('2x2 flat heightmap is a box', () => {
-  expect(check(buildStl(new Float32Array([0, 0, 0, 0]), 2, 2, opts))).toBe(14) // 2 top + 4 bottom + 8 walls
-  expect(check(buildStl(new Float32Array([1, 1, 1, 1]), 2, 2, opts))).toBe(38) // walls have one band per level: 4 edges * 4 bands * 2
+  expect(check(buildStl(new Float32Array([0, 0, 0, 0]), 2, 2, opts))).toBe(12) // 2 top + 2 floor + 8 walls
+  expect(check(buildStl(new Float32Array([1, 1, 1, 1]), 2, 2, opts))).toBe(36) // walls have one band per level: 4 edges * 4 bands * 2
 })
 
 test('terraced mesh is watertight and consistently oriented', () => {
@@ -53,4 +53,16 @@ test('framed meshes are watertight', () => {
     const { heights, ...o } = frameField(f, w, h, { frame, thresholds: [25, 50, 75], layerHeightMm: 0.15, widthMm: 20, heightMm: null })
     check(buildStl(heights, w, h, o))
   }
+})
+
+test('void pixels are cut out and the mesh stays watertight', () => {
+  // 2x2 with the top-right void: the (tl,br,bl) triangle survives with 3 walls (1 band each) and a floor
+  expect(check(buildStl(new Float32Array([0, -1, 0, 0]), 2, 2, opts))).toBe(1 + 1 + 3 * 2)
+  const w = 7, h = 6
+  const heights = Float32Array.from({ length: w * h }, (_, i) => ((i * 7) % 11) / 10)
+  heights[3 * w + 4] = -1 // interior hole (kept clear of the notch: void regions touching only at a vertex are non-manifold there)
+  heights[0] = heights[1] = heights[w] = -1 // notched corner
+  check(buildStl(heights, w, h, opts))
+  for (let c = 0; c < w; c++) heights[5 * w + c] = -1 // whole bottom row void
+  check(buildStl(heights, w, h, opts))
 })

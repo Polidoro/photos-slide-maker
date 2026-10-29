@@ -1,6 +1,6 @@
 import type React from "react";
 import { Range } from "react-range";
-import { layerMask } from "./image";
+import { captureFreeze, thawLowest } from "./image";
 import { pickParams, selectImage, useStore } from "./store";
 
 function Slider({
@@ -46,18 +46,9 @@ function Slider({
             >
               <div
                 ref={props.ref}
-                className="relative h-5 w-full rounded border border-gray-400"
+                className="h-5 w-full rounded border border-gray-400"
                 style={{ background }}
               >
-                {sections?.map((t, k) => (
-                  <span
-                    key={k}
-                    className="pointer-events-none absolute inset-y-0 flex items-center justify-center gap-1 overflow-hidden text-[10px] text-white mix-blend-difference"
-                    style={{ left: `${edges[k]}%`, width: `${edges[k + 1] - edges[k]}%` }}
-                  >
-                    {t}
-                  </span>
-                ))}
                 {children}
               </div>
             </div>
@@ -75,6 +66,19 @@ function Slider({
           }}
         />
       </div>
+      {sections && (
+        <div className="relative h-4 w-full text-xs text-gray-500 dark:text-gray-400">
+          {sections.map((t, k) => (
+            <span
+              key={k}
+              className="absolute inset-y-0 flex items-center justify-center gap-1 overflow-hidden whitespace-nowrap"
+              style={{ left: `${edges[k]}%`, width: `${edges[k + 1] - edges[k]}%` }}
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -106,12 +110,14 @@ export function Levels() {
   const levelMax = useStore((s) => s.levelMax);
   const thresholds = useStore((s) => s.thresholds);
   const background = useStore((s) => s.background);
+  const baseMm = useStore((s) => s.baseMm);
   const layerHeightMm = useStore((s) => s.layerHeightMm);
+  const flipDepth = useStore((s) => s.flipDepth);
   const invert = useStore((s) => s.invert);
   const image = useStore(selectImage);
   const hasAlpha = image?.hasAlpha ?? false;
-  const locks = useStore((s) => s.locks);
-  const setLock = useStore((s) => s.setLock);
+  const freeze = image?.freeze ?? null;
+  const setFreeze = useStore((s) => s.setFreeze);
   const setParam = useStore((s) => s.setParam);
   const setLayers = useStore((s) => s.setLayers);
   const layers = thresholds.length + 1;
@@ -151,20 +157,17 @@ export function Levels() {
         background={`linear-gradient(to right, ${stops.join(", ")})`}
         onChange={(v) => setParam("thresholds", v)}
         sections={edges.slice(0, -1).map((_, k) => {
-          // Locks grow down from the top layer and release from the bottom of the locked run, so the run stays contiguous.
-          const locked = !!locks[k];
-          const run = (a: number, b: number) => Array.from({ length: b - a }, (_, j) => !!locks[a + j]); // no holes, unlike slice()
-          const enabled = locked ? !run(0, k).some(Boolean) : run(k + 1, layers).every(Boolean);
+          // Everything from `from` up is frozen. Lock extends the run down one level; unlock releases only its lowest level.
+          const from = freeze?.from ?? layers;
+          const locked = k >= from;
           return (
             <>
-              {((k + 1) * layerHeightMm).toFixed(2)} mm
+              {((flipDepth ? layers - k : k + 1) * layerHeightMm).toFixed(2)} mm
               <LockButton
                 locked={locked}
-                disabled={!enabled || !image}
+                disabled={!image || (locked ? k !== from : k !== from - 1)}
                 onClick={() =>
-                  locked
-                    ? setLock(k, undefined)
-                    : createImageBitmap(layerMask(image!.bitmap, pickParams(useStore.getState()), locks, k)).then((m) => setLock(k, m))
+                  setFreeze(locked ? thawLowest(freeze!, layers) : captureFreeze(image!.bitmap, pickParams(useStore.getState()), freeze, k))
                 }
               />
             </>
@@ -180,10 +183,24 @@ export function Levels() {
       />
       {hasAlpha && (
         <Slider
-          label="Background"
+          label="Base"
           values={[background]}
           background={`linear-gradient(to right, ${stops.join(", ")})`}
           onChange={([v]) => setParam("background", v)}
+          right={
+            <select
+              aria-label="Base depth"
+              value={String(baseMm)}
+              onChange={(e) => { const v = e.target.value; setParam("baseMm", v === "level" || v === "none" ? v : Number(v)); }}
+              className="rounded border border-gray-300 bg-white px-2 py-0.5 dark:border-gray-600 dark:bg-gray-800"
+            >
+              <option value="level">Level</option>
+              <option value="none">None</option>
+              {Array.from({ length: 10 }, (_, i) => (0.15 + 0.5 * i).toFixed(2)).map((v) => (
+                <option key={v} value={Number(v)}>{v} mm</option>
+              ))}
+            </select>
+          }
         />
       )}
     </>

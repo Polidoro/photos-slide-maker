@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { bilateralField, frameField, hysteresisMask, levelOf, medianField, removeSmall, thresholdsOf, tone } from './image'
+import { bilateralField, frameField, hysteresisMask, levelOf, medianField, removeSmall, thawLowest, thresholdsOf, tone } from './image'
 
 test('median removes a speck and keeps a hard edge', () => {
   const w = 9, h = 9
@@ -78,4 +78,32 @@ test('tone: defaults are identity; each knob moves the right part of the range',
   expect(tone(1, { ...d, shadows: 100 })).toBeCloseTo(1) // shadows leave white alone
   expect(tone(1, { ...d, highlights: -100 })).toBeCloseTo(0.5)
   expect(tone(0, { ...d, highlights: -100 })).toBeCloseTo(0) // highlights leave black alone
+})
+
+test('thawLowest releases one level at a time and ends with null', () => {
+  const f = { from: 1, w: 2, h: 1, levels: Uint8Array.from([1, 2]) }
+  const t = thawLowest(f, 3)!
+  expect(t.from).toBe(2)
+  expect(Array.from(t.levels)).toEqual([255, 2])
+  expect(thawLowest(t, 3)).toBeNull()
+})
+
+test('frameField base: fixed depth and void for masked pixels', () => {
+  const p = { frame: 'none' as const, thresholds: [50], layerHeightMm: 0.2, widthMm: 10, heightMm: null }
+  const mask = Uint8Array.of(1, 0)
+  const fixed = frameField(Float32Array.of(0.1, 0.1), 2, 1, p, { mask, level: 4 }) // 1 mm at 0.2 mm layers
+  expect(fixed.heights[0]).toBe(4)
+  expect(fixed.heights[1]).toBeLessThan(1)
+  expect(fixed.maxHeightMm).toBeCloseTo(0.8) // thresholds grew to cover the base level (top = base layer + 4 more)
+  const none = frameField(Float32Array.of(0.1, 0.1), 2, 1, p, { mask, level: -1 })
+  expect(none.heights[0]).toBe(-1)
+})
+
+test('flipDepth mirrors image levels but not the frame', () => {
+  const p = { frame: 'flat' as const, thresholds: [50], layerHeightMm: 0.5, widthMm: 10, heightMm: null, flipDepth: true }
+  const f = Float32Array.from({ length: 25 }, (_, i) => (i === 12 ? 0.1 : 0.9)) // 5x5, dark centre, light elsewhere
+  const { heights, thresholds } = frameField(f, 5, 5, p)
+  expect(levelOf(heights[12], thresholds)).toBe(1) // dark -> top image level
+  expect(levelOf(heights[6], thresholds)).toBe(0) // light interior -> bottom
+  expect(levelOf(heights[0], thresholds)).toBe(1) // 1 mm frame at 0.5 mm layers is level 1 either way
 })

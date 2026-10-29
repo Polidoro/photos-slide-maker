@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useStore as useZustand } from "zustand";
 import { Tooltip } from "react-tooltip";
 import "react-tooltip/dist/react-tooltip.css";
@@ -102,27 +102,32 @@ export function Controls() {
   // zundo's history arrays change exactly when a tracked param change is recorded, undone or redone.
   const past = useZustand(useStore.temporal, (t) => t.pastStates);
   const future = useZustand(useStore.temporal, (t) => t.futureStates);
-  const locks = useStore((s) => s.locks);
+  const autogen = useStore((s) => s.autogen);
+  const flipDepth = useStore((s) => s.flipDepth);
+  const setAutogen = useStore((s) => s.setAutogen);
   const [stl, setStl] = useState<ArrayBuffer | null>(null);
 
   const bitmap = img?.bitmap;
+  const freeze = img?.freeze ?? null;
 
-  // Rebuild the mesh after a committed param change (never mid-drag) or an image switch; cache it for download.
+  const build = useCallback(() => {
+    const st = useStore.getState(), cur = selectImage(st)!;
+    const s = sampleHeights(cur.bitmap, pickParams(st), cur.freeze, st.flipDepth);
+    setStl(buildStl(s.heights, s.w, s.h, s.opts));
+  }, []);
+  // Drop the cached mesh after a committed param change (never mid-drag) or an image switch; rebuild if Autogenerate is on.
   useEffect(() => {
     setStl(null);
-    if (!bitmap) return;
-    const id = setTimeout(() => {
-      const s = sampleHeights(bitmap, pickParams(useStore.getState()), locks);
-      setStl(buildStl(s.heights, s.w, s.h, s.opts));
-    }, 150);
+    if (!bitmap || !autogen) return;
+    const id = setTimeout(build, 150);
     return () => clearTimeout(id);
-  }, [bitmap, past, future, locks]);
+  }, [bitmap, past, future, freeze, autogen, build]);
 
   if (!img || !bitmap) return null;
   const stem = img.name.replace(/\.[^.]+$/, "");
 
   async function downloadPng() {
-    const data = quantizedImage(bitmap!, pickParams(useStore.getState()), locks);
+    const data = quantizedImage(bitmap!, pickParams(useStore.getState()), freeze);
     const c = new OffscreenCanvas(data.width, data.height);
     c.getContext("2d")!.putImageData(data, 0, 0);
     downloadBlob(await c.convertToBlob({ type: "image/png" }), stem + ".png");
@@ -309,12 +314,22 @@ export function Controls() {
         </p>
       </div>
       <button
-        disabled={!stl}
-        onClick={() => stl && downloadBlob(stl, stem + ".stl")}
+        disabled={autogen && !stl}
+        onClick={() => (stl ? downloadBlob(stl, stem + ".stl") : build())}
         className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
       >
-        {stl ? "Download STL" : "Generating…"}
+        {stl ? "Download STL" : autogen ? "Generating…" : "Generate STL"}
       </button>
+      <div className="flex justify-between text-sm">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={autogen} onChange={(e) => setAutogen(e.target.checked)} />
+          Autogenerate
+        </label>
+        <label className="flex items-center gap-2" title="Black prints highest, white lowest. Preview and PNG are unchanged.">
+          <input type="checkbox" checked={flipDepth} onChange={(e) => setParam("flipDepth", e.target.checked)} />
+          Flip Depth
+        </label>
+      </div>
     </div>
   );
 }

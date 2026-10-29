@@ -5,7 +5,10 @@ export type Opts = { widthMm: number; heightMm?: number; maxHeightMm: number; ba
 type V = { x: number; y: number; v: number; e: number; k: number } // e: original edge index of outgoing edge, -1 = chord at threshold k
 
 /**
- * Terraced mesh. `heights` is the continuous 0..1 field; level = number of thresholds at or below it.
+ * Terraced mesh. `heights` is the continuous 0..1 field; level = number of thresholds at or below it. A negative value
+ * marks a void pixel: triangles touching one are dropped and the edges facing them become outer walls, so the model
+ * can have cut-outs. Void boundaries follow the grid's triangle edges (half-pixel steps), not sub-pixel contours.
+ * ponytail: two void regions that touch only at a grid vertex share that vertical edge (non-manifold vertex); slicers cope.
  * Every grid cell is split into two triangles; each triangle is clipped by the level thresholds
  * (linear field, so all regions are convex). The clipped regions supply the sub-pixel contour
  * vertices, walls and border bands; their outline edges are chained into rings per level and each
@@ -53,6 +56,7 @@ export function buildMesh(heights: Float32Array, w: number, h: number, { widthMm
   }
 
   const ringEdges: number[][] = Array.from({ length: steps + 1 }, () => []) // per level: x0,y0,x1,y1 per directed edge
+  const bottom: number[] = [] // outer-wall footprint, so the floor is triangulated with every wall vertex present
 
   function triangle(i0: number, i1: number, i2: number, b0: boolean, b1: boolean, b2: boolean) {
     const edges: [number, number][] = [[i0, i1], [i1, i2], [i2, i0]]
@@ -79,17 +83,23 @@ export function buildMesh(heights: Float32Array, w: number, h: number, { widthMm
             tri(a.x, a.y, z0, b.x, b.y, z0, b.x, b.y, z1)
             tri(a.x, a.y, z0, b.x, b.y, z1, a.x, a.y, z1)
           }
+          bottom.push(a.x, a.y, b.x, b.y)
         }
       }
     }
   }
 
+  // Cell (r,c) is split on the TL–BR diagonal into A = (tl,tr,br) and B = (tl,br,bl). An edge is a wall when the
+  // triangle across it is outside the image or void.
+  const V = (i: number) => heights[i] < 0
+  const voidA = (r: number, c: number) => r < 0 || r >= h - 1 || c < 0 || c >= w - 1 || V(r * w + c) || V(r * w + c + 1) || V(r * w + c + w + 1)
+  const voidB = (r: number, c: number) => r < 0 || r >= h - 1 || c < 0 || c >= w - 1 || V(r * w + c) || V(r * w + c + w + 1) || V(r * w + c + w)
   for (let r = 0; r < h - 1; r++)
     for (let c = 0; c < w - 1; c++) {
       const tl = r * w + c, tr = tl + 1, bl = tl + w, br = bl + 1
-      // ponytail: fixed TL–BR diagonal; saddle cells resolve toward that diagonal
-      triangle(tl, tr, br, r === 0, c === w - 2, false)
-      triangle(tl, br, bl, false, r === h - 2, c === 0)
+      // ponytail: fixed TL–BR diagonal; saddle cells resolve toward that diagonal, and a void at tl or br empties the whole cell
+      if (!voidA(r, c)) triangle(tl, tr, br, voidB(r - 1, c), voidB(r, c + 1), voidB(r, c))
+      if (!voidB(r, c)) triangle(tl, br, bl, voidA(r, c), voidA(r + 1, c), voidA(r, c - 1))
     }
 
   // tops: one polygon triangulation per terrace ring set
@@ -98,25 +108,8 @@ export function buildMesh(heights: Float32Array, w: number, h: number, { widthMm
     tri(t[0], t[1], z, t[2], t[3], z, t[4], t[5], z)
   }
 
-  // bottom: perimeter (with every crossing) fanned from the center, reversed winding
-  const per: number[] = []
-  for (let c = 0; c < w - 1; c++) per.push(c)
-  for (let r = 0; r < h - 1; r++) per.push(r * w + w - 1)
-  for (let c = w - 1; c > 0; c--) per.push((h - 1) * w + c)
-  for (let r = h - 1; r > 0; r--) per.push(r * w)
-  const ring: { x: number; y: number }[] = []
-  for (let i = 0; i < per.length; i++) {
-    const a = per[i], b = per[(i + 1) % per.length]
-    ring.push({ x: X(a), y: Y(a) })
-    const la = lvl(a), lb = lvl(b)
-    if (la < lb) for (let k = la + 1; k <= lb; k++) ring.push(cross(a, b, k))
-    else for (let k = la; k > lb; k--) ring.push(cross(a, b, k))
-  }
-  const cx = X(w - 1) / 2, cy = Y(0) / 2
-  for (let i = 0; i < ring.length; i++) {
-    const p = ring[i], q = ring[(i + 1) % ring.length]
-    tri(cx, cy, 0, q.x, q.y, 0, p.x, p.y, 0)
-  }
+  // floor: the wall footprint triangulated like a terrace (so cut-outs become holes), wound to face down
+  for (const t of triangulate(bottom)) tri(t[0], t[1], 0, t[4], t[5], 0, t[2], t[3], 0)
   return out
 }
 
