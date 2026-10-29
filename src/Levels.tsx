@@ -1,0 +1,146 @@
+import type React from "react";
+import { Range } from "react-range";
+import { selectImage, useStore } from "./store";
+
+function Slider({
+  label,
+  values,
+  background,
+  onChange,
+  right,
+  sections,
+}: {
+  label: string;
+  values: number[];
+  background: string;
+  onChange: (v: number[]) => void;
+  right?: React.ReactNode;
+  sections?: string[]; // one caption per gap between the track edges and the handles
+}) {
+  const edges = [0, ...values, 100];
+  const setDragging = useStore((s) => s.setDragging);
+  return (
+    <div className="flex w-full flex-col gap-1 text-sm">
+      <div className="flex justify-between">
+        <span>
+          {label}: {values.join(" · ")}%
+        </span>
+        {right}
+      </div>
+      <div onPointerDown={() => setDragging(true)}>
+        <Range
+          values={values}
+          min={0}
+          max={100}
+          step={1}
+          onChange={(v) => {
+            if (v.every((x, i) => i === 0 || x > v[i - 1])) onChange(v);
+          }}
+          renderTrack={({ props, children }) => (
+            <div
+              onMouseDown={props.onMouseDown}
+              onTouchStart={props.onTouchStart}
+              style={props.style}
+              className="w-full py-2"
+            >
+              <div
+                ref={props.ref}
+                className="relative h-5 w-full rounded border border-gray-400"
+                style={{ background }}
+              >
+                {sections?.map((t, k) => (
+                  <span
+                    key={k}
+                    className="pointer-events-none absolute inset-y-0 overflow-hidden text-center text-[10px] leading-5 text-white mix-blend-difference"
+                    style={{ left: `${edges[k]}%`, width: `${edges[k + 1] - edges[k]}%` }}
+                  >
+                    {t}
+                  </span>
+                ))}
+                {children}
+              </div>
+            </div>
+          )}
+          renderThumb={({ props, index: i }) => {
+            const { key, ...rest } = props;
+            return (
+              <div
+                key={key}
+                {...rest}
+                aria-label={`${label} handle ${i}`}
+                className="h-7 w-3 rounded border border-white bg-blue-600 shadow outline-none"
+              />
+            );
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function Levels() {
+  const levelMin = useStore((s) => s.levelMin);
+  const levelMax = useStore((s) => s.levelMax);
+  const thresholds = useStore((s) => s.thresholds);
+  const background = useStore((s) => s.background);
+  const layerHeightMm = useStore((s) => s.layerHeightMm);
+  const invert = useStore((s) => s.invert);
+  const hasAlpha = useStore((s) => selectImage(s)?.hasAlpha ?? false);
+  const setParam = useStore((s) => s.setParam);
+  const setLayers = useStore((s) => s.setLayers);
+  const layers = thresholds.length + 1;
+  const iconBtn = "h-6 w-6 rounded border border-gray-400 leading-none disabled:opacity-40";
+
+  // Each section shows the gray its level prints as.
+  const edges = [0, ...thresholds, 100];
+  const stops = edges.slice(0, -1).map((a, k) => {
+    const g = Math.round((k / (layers - 1)) * 255);
+    return `rgb(${g},${g},${g}) ${a}% ${edges[k + 1]}%`;
+  });
+
+  return (
+    <>
+      <Slider
+        label="Range"
+        values={[levelMin, levelMax]}
+        background="linear-gradient(to right, #000, #fff)"
+        onChange={([lo, hi]) => {
+          setParam("levelMin", lo);
+          setParam("levelMax", hi);
+        }}
+        right={
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={invert}
+              onChange={(e) => setParam("invert", e.target.checked)}
+            />
+            Invert Image
+          </label>
+        }
+      />
+      <Slider
+        label="Levels"
+        values={thresholds}
+        background={`linear-gradient(to right, ${stops.join(", ")})`}
+        onChange={(v) => setParam("thresholds", v)}
+        sections={edges.slice(0, -1).map((_, k) => `${((k + 1) * layerHeightMm).toFixed(2)} mm`)}
+        right={
+          <span className="flex items-center gap-1">
+            {layers} layers
+            <button aria-label="Fewer layers" className={iconBtn} disabled={layers <= 2} onClick={() => setLayers(layers - 1)}>−</button>
+            <button aria-label="More layers" className={iconBtn} disabled={layers >= 12} onClick={() => setLayers(layers + 1)}>+</button>
+          </span>
+        }
+      />
+      {hasAlpha && (
+        <Slider
+          label="Background"
+          values={[background]}
+          background={`linear-gradient(to right, ${stops.join(", ")})`}
+          onChange={([v]) => setParam("background", v)}
+        />
+      )}
+    </>
+  );
+}
