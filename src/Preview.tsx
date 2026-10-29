@@ -6,6 +6,7 @@ import { pickParams, selectImage, useStore } from './store'
 export function Preview({ opacity }: { opacity: number }) {
   const image = useStore(selectImage)?.bitmap
   const params = useStore(useShallow(pickParams))
+  const locks = useStore((s) => s.locks)
   const ref = useRef<HTMLCanvasElement>(null)
   const src = useRef<HTMLCanvasElement>(null)
 
@@ -21,14 +22,14 @@ export function Preview({ opacity }: { opacity: number }) {
   useEffect(() => {
     if (!image) return
     const id = requestAnimationFrame(() => {
-      const img = quantizedImage(image, params)
+      const img = quantizedImage(image, params, locks)
       const canvas = ref.current!
       canvas.width = img.width
       canvas.height = img.height
       canvas.getContext('2d')!.putImageData(img, 0, 0)
     })
     return () => cancelAnimationFrame(id)
-  }, [image, params])
+  }, [image, params, locks])
 
   return (
     <div className="relative w-fit max-w-full">

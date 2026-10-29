@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { temporal } from 'zundo'
 import { allImages, deleteImage, putImage } from './db'
-import { hasAlpha } from './image'
+import { hasAlpha, type Locks } from './image'
 
 export type Params = {
   contrast: number; saturation: number // -100..100, applied as canvas filters before the gray conversion
@@ -43,6 +43,8 @@ type State = Params & {
   images: Img[]
   index: number
   configs: Record<number, Params> // params per image id; the top-level params mirror configs[current image]
+  locks: Locks // frozen layer masks for the current image, by level; in memory only, cleared on image switch or layer-count change
+  setLock: (level: number, mask: ImageBitmap | undefined) => void
   setDragging: (b: boolean) => void // pauses undo history while a slider is dragged
   addImage: (file: File) => Promise<void>
   hydrate: () => Promise<void>
@@ -64,7 +66,7 @@ const same = (a: Params, b: Params) => JSON.stringify(a) === JSON.stringify(b)
 const swap = (s: Pick<State, 'images' | 'configs'>, index: number) => {
   const id = s.images[index]?.id
   queueMicrotask(() => useStore.temporal.getState().clear())
-  return { index, ...((id !== undefined && s.configs[id]) || DEFAULTS) }
+  return { index, locks: [] as Locks, ...((id !== undefined && s.configs[id]) || DEFAULTS) }
 }
 
 export const useStore = create<State>()(
@@ -75,6 +77,8 @@ export const useStore = create<State>()(
         images: [],
         index: -1,
         configs: {},
+        locks: [],
+        setLock: (level, mask) => set((s) => { const locks = s.locks.slice(); locks[level] = mask; return { locks } }),
         setDragging: (b) => {
           const t = useStore.temporal
           if (b && !dragStart) {
@@ -113,12 +117,12 @@ export const useStore = create<State>()(
         clear: () => set((s) => swap(s, -1)),
         reset: () => set(DEFAULTS),
         setParams: (p) => set(pickParams(p)),
-        setLayers: (n) => set({ thresholds: respace(n) }),
+        setLayers: (n) => set({ thresholds: respace(n), locks: [] }),
         setParam: (key, value) => set({ [key]: value }),
       }),
       {
         name: 'shademaker',
-        partialize: ({ images: _i, ...rest }) => rest, // params + index; images live in IndexedDB
+        partialize: ({ images: _i, locks: _l, ...rest }) => rest, // params + index + configs; images live in IndexedDB, locks in memory
       },
     ),
     { limit: LIMIT, partialize: pickParams, equality: same },

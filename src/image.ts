@@ -55,9 +55,45 @@ export function hasAlpha(image: ImageBitmap): boolean {
   return false
 }
 
+/** Frozen layer masks by level: an opaque pixel means "this pixel is level k", whatever the live pipeline says. Holes = unlocked. */
+export type Locks = (ImageBitmap | undefined)[]
+const NO_LOCKS: Locks = []
+
+/**
+ * Apply locks to the 0..1 field. Live pixels that land in a locked level drop to the closest (highest) unlocked level,
+ * then each mask paints its level back, low to high. Masks are nearest-sampled to the current grid, so they survive resizes.
+ */
+function applyLocks(heights: Float32Array, w: number, h: number, thresholds: number[], locks: Locks): Float32Array {
+  if (!locks.some(Boolean)) return heights
+  const edges = [0, ...thresholds, 1]
+  const centre = (k: number) => (edges[k] + edges[k + 1]) / 2 // band centre maps to exactly level k in frameField
+  let top = -1
+  for (let k = 0; k <= thresholds.length; k++) if (!locks[k]) top = k
+  const out = heights.slice()
+  if (top >= 0) for (let i = 0; i < out.length; i++) if (levelOf(out[i], thresholds) > top) out[i] = centre(top)
+  const ctx = new OffscreenCanvas(w, h).getContext('2d')!
+  ctx.imageSmoothingEnabled = false
+  locks.forEach((mask, k) => {
+    if (!mask) return
+    ctx.clearRect(0, 0, w, h)
+    ctx.drawImage(mask, 0, 0, w, h)
+    const { data } = ctx.getImageData(0, 0, w, h)
+    for (let i = 0; i < out.length; i++) if (data[4 * i + 3] >= ALPHA_CUTOFF) out[i] = centre(k)
+  })
+  return out
+}
+
+/** Pixels currently at `level` as an opaque white mask over transparency, for locking. */
+export function layerMask(image: ImageBitmap, params: PipelineParams, locks: Locks, level: number): ImageData {
+  const { heights, w, h, opts } = sampleHeights(image, params, locks)
+  const px = new Uint8ClampedArray(w * h * 4)
+  for (let i = 0; i < heights.length; i++) if (levelOf(heights[i], opts.thresholds) === level) px.fill(255, 4 * i, 4 * i + 4)
+  return new ImageData(px, w, h)
+}
+
 /** The quantized grayscale as pixels: what the preview shows and the PNG export saves. Frame levels above the image's top print white. */
-export function quantizedImage(image: ImageBitmap, params: PipelineParams): ImageData {
-  const { heights, w, h, opts } = sampleHeights(image, params)
+export function quantizedImage(image: ImageBitmap, params: PipelineParams, locks: Locks = NO_LOCKS): ImageData {
+  const { heights, w, h, opts } = sampleHeights(image, params, locks)
   const steps = params.thresholds.length
   const px = new Uint8ClampedArray(w * h * 4)
   for (let i = 0; i < heights.length; i++) {
@@ -234,7 +270,7 @@ export function tone(l: number, p: Pick<PipelineParams, 'lightness' | 'gamma' | 
   return Math.min(1, Math.max(0, l))
 }
 
-function computeHeights(image: ImageBitmap, p: PipelineParams) {
+function computeHeights(image: ImageBitmap, p: PipelineParams, locks: Locks) {
   const { w, h } = fit(image, gridSize(p.widthMm, p.nozzleMm))
   const ctx = new OffscreenCanvas(w, h).getContext('2d')!
   // Native filters: saturate() reweights the channels feeding the gray conversion, so it still matters for a grayscale result.
@@ -272,17 +308,20 @@ function computeHeights(image: ImageBitmap, p: PipelineParams) {
   // Transparent pixels become the background gray, bypassing invert, levels and smoothing.
   for (let i = 0; i < heights.length; i++) if (transparent[i]) heights[i] = p.background / 100
 
+  // 4b. Locked layers override whatever the live pipeline produced for them.
+  heights = applyLocks(heights, w, h, thresholds, locks)
+
   // 5. Frame and convert to layer units (the mesher's field).
   const { heights: framed, ...opts } = frameField(heights, w, h, p)
   return { heights: framed, w, h, opts }
 }
 
 // Single-entry memo: the preview and the STL build ask for the same result back to back.
-let last: { image: ImageBitmap; key: string; result: ReturnType<typeof computeHeights> } | null = null
-export function sampleHeights(image: ImageBitmap, p: PipelineParams) {
+let last: { image: ImageBitmap; key: string; locks: Locks; result: ReturnType<typeof computeHeights> } | null = null
+export function sampleHeights(image: ImageBitmap, p: PipelineParams, locks: Locks = NO_LOCKS) {
   const key = JSON.stringify(p)
-  if (last && last.image === image && last.key === key) return last.result
-  const result = computeHeights(image, p)
-  last = { image, key, result }
+  if (last && last.image === image && last.key === key && last.locks === locks) return last.result
+  const result = computeHeights(image, p, locks)
+  last = { image, key, locks, result }
   return result
 }

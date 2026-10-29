@@ -102,6 +102,7 @@ export function Controls() {
   // zundo's history arrays change exactly when a tracked param change is recorded, undone or redone.
   const past = useZustand(useStore.temporal, (t) => t.pastStates);
   const future = useZustand(useStore.temporal, (t) => t.futureStates);
+  const locks = useStore((s) => s.locks);
   const [stl, setStl] = useState<ArrayBuffer | null>(null);
 
   const bitmap = img?.bitmap;
@@ -111,17 +112,17 @@ export function Controls() {
     setStl(null);
     if (!bitmap) return;
     const id = setTimeout(() => {
-      const s = sampleHeights(bitmap, pickParams(useStore.getState()));
+      const s = sampleHeights(bitmap, pickParams(useStore.getState()), locks);
       setStl(buildStl(s.heights, s.w, s.h, s.opts));
     }, 150);
     return () => clearTimeout(id);
-  }, [bitmap, past, future]);
+  }, [bitmap, past, future, locks]);
 
   if (!img || !bitmap) return null;
   const stem = img.name.replace(/\.[^.]+$/, "");
 
   async function downloadPng() {
-    const data = quantizedImage(bitmap!, pickParams(useStore.getState()));
+    const data = quantizedImage(bitmap!, pickParams(useStore.getState()), locks);
     const c = new OffscreenCanvas(data.width, data.height);
     c.getContext("2d")!.putImageData(data, 0, 0);
     downloadBlob(await c.convertToBlob({ type: "image/png" }), stem + ".png");

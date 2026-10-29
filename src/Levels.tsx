@@ -1,6 +1,7 @@
 import type React from "react";
 import { Range } from "react-range";
-import { selectImage, useStore } from "./store";
+import { layerMask } from "./image";
+import { pickParams, selectImage, useStore } from "./store";
 
 function Slider({
   label,
@@ -15,7 +16,7 @@ function Slider({
   background: string;
   onChange: (v: number[]) => void;
   right?: React.ReactNode;
-  sections?: string[]; // one caption per gap between the track edges and the handles
+  sections?: React.ReactNode[]; // one caption per gap between the track edges and the handles
 }) {
   const edges = [0, ...values, 100];
   const setDragging = useStore((s) => s.setDragging);
@@ -51,7 +52,7 @@ function Slider({
                 {sections?.map((t, k) => (
                   <span
                     key={k}
-                    className="pointer-events-none absolute inset-y-0 overflow-hidden text-center text-[10px] leading-5 text-white mix-blend-difference"
+                    className="pointer-events-none absolute inset-y-0 flex items-center justify-center gap-1 overflow-hidden text-[10px] text-white mix-blend-difference"
                     style={{ left: `${edges[k]}%`, width: `${edges[k + 1] - edges[k]}%` }}
                   >
                     {t}
@@ -78,6 +79,28 @@ function Slider({
   );
 }
 
+/** Padlock toggle inside a slider section. Stops the pointer events so react-range doesn't start a drag. */
+function LockButton({ locked, disabled, onClick }: { locked: boolean; disabled: boolean; onClick: () => void }) {
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  return (
+    <button
+      aria-label={locked ? "Unlock layer" : "Lock layer"}
+      aria-pressed={locked}
+      disabled={disabled}
+      onPointerDown={stop}
+      onMouseDown={stop}
+      onTouchStart={stop}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className={`pointer-events-auto shrink-0 disabled:opacity-20 ${locked ? "" : "opacity-50"}`}
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill={locked ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
+        <rect x="4" y="11" width="16" height="10" rx="2" />
+        <path d={locked ? "M8 11V7a4 4 0 0 1 8 0v4" : "M8 11V7a4 4 0 0 1 7.5-2"} />
+      </svg>
+    </button>
+  );
+}
+
 export function Levels() {
   const levelMin = useStore((s) => s.levelMin);
   const levelMax = useStore((s) => s.levelMax);
@@ -85,7 +108,10 @@ export function Levels() {
   const background = useStore((s) => s.background);
   const layerHeightMm = useStore((s) => s.layerHeightMm);
   const invert = useStore((s) => s.invert);
-  const hasAlpha = useStore((s) => selectImage(s)?.hasAlpha ?? false);
+  const image = useStore(selectImage);
+  const hasAlpha = image?.hasAlpha ?? false;
+  const locks = useStore((s) => s.locks);
+  const setLock = useStore((s) => s.setLock);
   const setParam = useStore((s) => s.setParam);
   const setLayers = useStore((s) => s.setLayers);
   const layers = thresholds.length + 1;
@@ -124,7 +150,26 @@ export function Levels() {
         values={thresholds}
         background={`linear-gradient(to right, ${stops.join(", ")})`}
         onChange={(v) => setParam("thresholds", v)}
-        sections={edges.slice(0, -1).map((_, k) => `${((k + 1) * layerHeightMm).toFixed(2)} mm`)}
+        sections={edges.slice(0, -1).map((_, k) => {
+          // Locks grow down from the top layer and release from the bottom of the locked run, so the run stays contiguous.
+          const locked = !!locks[k];
+          const run = (a: number, b: number) => Array.from({ length: b - a }, (_, j) => !!locks[a + j]); // no holes, unlike slice()
+          const enabled = locked ? !run(0, k).some(Boolean) : run(k + 1, layers).every(Boolean);
+          return (
+            <>
+              {((k + 1) * layerHeightMm).toFixed(2)} mm
+              <LockButton
+                locked={locked}
+                disabled={!enabled || !image}
+                onClick={() =>
+                  locked
+                    ? setLock(k, undefined)
+                    : createImageBitmap(layerMask(image!.bitmap, pickParams(useStore.getState()), locks, k)).then((m) => setLock(k, m))
+                }
+              />
+            </>
+          );
+        })}
         right={
           <span className="flex items-center gap-1">
             {layers} layers
