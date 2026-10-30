@@ -43,18 +43,18 @@ test('params are kept per image and restored on select', () => {
 })
 
 test('eraser strokes undo/redo independently of params, and any other freeze change clears them', () => {
-  const f = (from: number) => ({ from, w: 1, h: 1, levels: Uint8Array.of(from) })
+  const f = (k: number) => ({ locked: [k], w: 1, h: 1, bits: Uint16Array.of(1 << k) })
   useStore.setState({ images: [{ id: 9, freeze: f(2) }] as never[], index: 0, strokes: { past: [], future: [] } })
   const s = useStore.getState()
   s.commitStroke(f(3))
   s.commitStroke(f(4))
-  expect(useStore.getState().images[0].freeze!.from).toBe(4)
+  expect(useStore.getState().images[0].freeze!.locked[0]).toBe(4)
   s.undoStroke()
-  expect(useStore.getState().images[0].freeze!.from).toBe(3)
+  expect(useStore.getState().images[0].freeze!.locked[0]).toBe(3)
   s.redoStroke()
-  expect(useStore.getState().images[0].freeze!.from).toBe(4)
+  expect(useStore.getState().images[0].freeze!.locked[0]).toBe(4)
   s.undoStroke(); s.undoStroke(); s.undoStroke() // past the start is a no-op
-  expect(useStore.getState().images[0].freeze!.from).toBe(2)
+  expect(useStore.getState().images[0].freeze!.locked[0]).toBe(2)
   s.setFreeze(f(1)) // lock/thaw: history gone
   expect(useStore.getState().strokes.past.length).toBe(0)
 })

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { bilateralField, frameField, hysteresisMask, levelOf, medianField, brushFreeze, removeSmall, thawLowest, thresholdsOf, tone } from './image'
+import { bilateralField, frameField, hysteresisMask, levelOf, medianField, applyFreeze, brushFreeze, lockedLevel, removeSmall, thaw, thresholdsOf, tone } from './image'
 
 test('median removes a speck and keeps a hard edge', () => {
   const w = 9, h = 9
@@ -80,14 +80,6 @@ test('tone: defaults are identity; each knob moves the right part of the range',
   expect(tone(0, { ...d, highlights: -100 })).toBeCloseTo(0) // highlights leave black alone
 })
 
-test('thawLowest releases one level at a time and ends with null', () => {
-  const f = { from: 1, w: 2, h: 1, levels: Uint8Array.from([1, 2]) }
-  const t = thawLowest(f, 3)!
-  expect(t.from).toBe(2)
-  expect(Array.from(t.levels)).toEqual([255, 2])
-  expect(thawLowest(t, 3)).toBeNull()
-})
-
 test('frameField base: fixed depth and void for masked pixels', () => {
   const p = { frame: 'none' as const, thresholds: [50], layerHeightMm: 0.2, widthMm: 10, heightMm: null }
   const mask = Uint8Array.of(1, 0)
@@ -114,12 +106,23 @@ test('flipDepth mirrors image levels but not the frame', () => {
   expect(frameField(f, 5, 5, { ...p, frame: 'none' }, { mask, level: -1 }).heights[7]).toBe(-1) // void stays void
 })
 
-test('brushFreeze: erase cuts this level and above down to the frozen level below or frees; add claims pixels from every level', () => {
-  const f = { from: 1, w: 3, h: 1, levels: Uint8Array.from([2, 2, 1]) }
-  expect(Array.from(brushFreeze(f, 2, 0, 0, 0.5, 'erase').levels)).toEqual([1, 2, 1]) // level 1 is frozen: drop to it
-  expect(Array.from(brushFreeze(f, 1, 2, 0, 0.5, 'erase').levels)).toEqual([2, 2, 255]) // nothing frozen below: free
-  expect(Array.from(brushFreeze(f, 2, 0, 0, 5, 'erase').levels)).toEqual([1, 1, 1]) // big brush, level-2 pixels change, level 1 stays
-  expect(Array.from(brushFreeze({ ...f, levels: Uint8Array.from([3, 2, 255]) }, 2, 1, 0, 5, 'erase').levels)).toEqual([1, 1, 255]) // cuts through level 3; free pixels stay free
-  expect(Array.from(brushFreeze({ ...f, levels: Uint8Array.from([255, 1, 2]) }, 1, 1, 0, 5, 'add').levels)).toEqual([1, 1, 1]) // add: free, lower and higher all become this level
-  expect(f.levels[0]).toBe(2) // input untouched
+test('brushFreeze: erase clears only this layer under the brush, add sets it; thaw drops the layer', () => {
+  const f = { locked: [1, 2], w: 3, h: 1, bits: Uint16Array.from([0b110, 0b110, 0b010]) }
+  expect(Array.from(brushFreeze(f, 2, 0, 0, 0.5, 'erase').bits)).toEqual([0b010, 0b110, 0b010])
+  expect(Array.from(brushFreeze(f, 1, 2, 0, 0.5, 'erase').bits)).toEqual([0b110, 0b110, 0b000])
+  expect(Array.from(brushFreeze(f, 2, 1, 0, 5, 'add').bits)).toEqual([0b110, 0b110, 0b110])
+  expect(f.bits[2]).toBe(0b010) // input untouched
+  expect(thaw(f, 2)!.locked).toEqual([1])
+  expect(thaw(thaw(f, 2)!, 1)).toBeNull()
+})
+
+test('locked layers stack on top of the live level: present raises to k, absent leaves the live output', () => {
+  expect(lockedLevel(3, 0b000, [])).toBe(3)
+  expect(lockedLevel(0, 0b010, [1])).toBe(1) // present raises
+  expect(lockedLevel(3, 0b000, [1])).toBe(3) // absent: live shows through
+  expect(lockedLevel(0, 0b1000, [1, 3])).toBe(3)
+  // applyFreeze snaps changed pixels to the band centre of the new level and nearest-samples a 1-wide freeze onto 2 pixels
+  const out = applyFreeze(Float32Array.from([0.9, 0.1]), 2, 1, [0.5], { locked: [1], w: 1, h: 1, bits: Uint16Array.of(0b010) })
+  expect(out[0]).toBeCloseTo(0.9)
+  expect(out[1]).toBe(0.75)
 })

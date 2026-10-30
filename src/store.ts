@@ -47,7 +47,9 @@ type State = Params & {
   index: number
   configs: Record<number, Params> // params per image id; the top-level params mirror configs[current image]
   autogen: boolean // rebuild the STL automatically after each change
-  editLevel: number | null // frozen level shown alone in the preview (pencil toggle); UI only
+  tab: 'images' | 'layers' // sidebar tab
+  setTab: (t: 'images' | 'layers') => void
+  editLevel: number | null // locked layer shown alone in the preview for editing; UI only
   setEditLevel: (k: number | null) => void
   setAutogen: (b: boolean) => void
   setFreeze: (f: Freeze | null) => void // on the current image; also written to IndexedDB. Clears stroke history.
@@ -89,6 +91,8 @@ export const useStore = create<State>()(
         index: -1,
         configs: {},
         autogen: true,
+        tab: 'images',
+        setTab: (tab) => set({ tab }),
         editLevel: null,
         setEditLevel: (editLevel) => set({ editLevel }),
         setAutogen: (autogen) => set({ autogen }),
@@ -138,7 +142,7 @@ export const useStore = create<State>()(
         },
         hydrate: async () => {
           const recs = await allImages()
-          const images = await Promise.all(recs.map(async (r) => { const bitmap = await createImageBitmap(r.blob); return { id: r.id, name: r.name, bitmap, hasAlpha: hasAlpha(bitmap), freeze: r.freeze ?? null } }))
+          const images = await Promise.all(recs.map(async (r) => { const bitmap = await createImageBitmap(r.blob); return { id: r.id, name: r.name, bitmap, hasAlpha: hasAlpha(bitmap), freeze: r.freeze && 'bits' in r.freeze ? r.freeze : null } })) // pre-bits freezes (from/levels) are dropped
           set((s) => ({ images, ...swap({ ...s, images }, Math.min(s.index, images.length - 1)) }))
         },
         select: (index) => set((s) => swap(s, index)),
@@ -167,7 +171,7 @@ export const useStore = create<State>()(
           const fix = (p: Params) => ((p.baseMm as unknown) === 'level' ? { ...p, baseMm: p.layerHeightMm } : p)
           return { ...fix(s), configs: Object.fromEntries(Object.entries(s.configs ?? {}).map(([k, v]) => [k, fix(v)])) }
         },
-        partialize: ({ images: _i, editLevel: _e, strokes: _s, ...rest }) => rest, // params + index + configs + autogen; images (and their freeze) live in IndexedDB
+        partialize: ({ images: _i, editLevel: _e, strokes: _s, ...rest }) => rest, // params + index + configs + autogen + tab; images (and their freeze) live in IndexedDB
       },
     ),
     { limit: LIMIT, partialize: pickParams, equality: same },
@@ -181,8 +185,6 @@ useStore.subscribe((s, prev) => {
 })
 
 export const selectImage = (s: State): Img | undefined => s.images[s.index]
-/** The level the pencil is showing, or null if none or it has since been unlocked. */
-export const selectEditLevel = (s: State): number | null => {
-  const f = selectImage(s)?.freeze
-  return s.editLevel !== null && f && s.editLevel >= f.from ? s.editLevel : null
-}
+/** The layer being edited (locked or not), or null if none or it no longer exists. */
+export const selectEditLevel = (s: State): number | null =>
+  s.editLevel !== null && s.editLevel <= s.thresholds.length ? s.editLevel : null

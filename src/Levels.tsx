@@ -1,7 +1,6 @@
 import type React from "react";
 import { Range } from "react-range";
-import { captureFreeze, thawLowest } from "./image";
-import { pickParams, selectImage, useStore } from "./store";
+import { selectImage, useStore } from "./store";
 
 function Slider({
   label,
@@ -139,10 +138,6 @@ export function Levels() {
   const invert = useStore((s) => s.invert);
   const image = useStore(selectImage);
   const hasAlpha = image?.hasAlpha ?? false;
-  const freeze = image?.freeze ?? null;
-  const setFreeze = useStore((s) => s.setFreeze);
-  const editLevel = useStore((s) => s.editLevel);
-  const setEditLevel = useStore((s) => s.setEditLevel);
   const setParam = useStore((s) => s.setParam);
   const setLayers = useStore((s) => s.setLayers);
   const layers = thresholds.length + 1;
@@ -184,40 +179,7 @@ export function Levels() {
         values={thresholds}
         background={`linear-gradient(to right, ${stops.join(", ")})`}
         onChange={(v) => setParam("thresholds", v)}
-        sections={edges.slice(0, -1).map((_, k) => {
-          // Everything from `from` up is frozen. Lock extends the run down one level; unlock releases only its lowest level.
-          const from = freeze?.from ?? layers;
-          const locked = k >= from;
-          // Locking level k pins it and every level above it (captureFreeze takes all levels >= k from the composited output).
-          const lock = () => setFreeze(captureFreeze(image!.bitmap, pickParams(useStore.getState()), freeze, k));
-          return (
-            <>
-              {((flipDepth ? layers - k : k + 1) * layerHeightMm).toFixed(2)} mm
-              <IconButton
-                label={locked ? "Unlock layer" : "Lock this layer and those above"}
-                active={locked}
-                disabled={!image || (locked && k !== from)} // unlock releases only the lowest frozen level
-                onClick={() => (locked ? setFreeze(thawLowest(freeze!, layers)) : lock())}
-              >
-                <rect x="4" y="11" width="16" height="10" rx="2" fill={locked ? "currentColor" : "none"} />
-                <path d={locked ? "M8 11V7a4 4 0 0 1 8 0v4" : "M8 11V7a4 4 0 0 1 7.5-2"} />
-              </IconButton>
-              <IconButton
-                label={editLevel === k ? "Show full preview" : "Edit this layer"}
-                active={editLevel === k}
-                disabled={!image}
-                onClick={() => {
-                  if (editLevel === k) return setEditLevel(null);
-                  if (!locked) lock();
-                  setEditLevel(k);
-                }}
-              >
-                <path d="M17 3l4 4L8 20H4v-4L17 3z" />
-                <path d="M14 6l4 4" />
-              </IconButton>
-            </>
-          );
-        })}
+        sections={edges.slice(0, -1).map((_, k) => `${((flipDepth ? layers - k : k + 1) * layerHeightMm).toFixed(2)} mm`)}
         right={
           <span className="flex items-center gap-1">
             {layers} layers

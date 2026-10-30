@@ -56,74 +56,96 @@ export function hasAlpha(image: ImageBitmap): boolean {
 }
 
 /**
- * Frozen top layers: every level >= `from` is pinned to what it was when frozen. `levels[i]` is the pinned level of grid
- * pixel i, or 255 where the live pipeline still decides. Stored at the grid size it was captured at and nearest-sampled
- * onto the current grid, so it survives width/nozzle changes. Plain arrays so it round-trips through IndexedDB.
+ * Locked layers: layer k (the mask "level >= k") is pinned to what it was when locked, independently of the others.
+ * `bits[i]` has bit k set where layer k is present at grid pixel i; only bits of layers in `locked` mean anything.
+ * Stored at the grid size it was captured at and nearest-sampled onto the current grid, so it survives width/nozzle changes.
  */
-export type Freeze = { from: number; w: number; h: number; levels: Uint8Array }
-const FREE = 255
+export type Freeze = { locked: number[]; w: number; h: number; bits: Uint16Array }
 
-/** Live pixels in a frozen level drop to the highest unfrozen level, then the frozen pixels are painted back. */
-function applyFreeze(heights: Float32Array, w: number, h: number, thresholds: number[], f: Freeze | null): Float32Array {
-  if (!f) return heights
-  const edges = [0, ...thresholds, 1]
-  const centre = (k: number) => (edges[k] + edges[k + 1]) / 2 // band centre maps to exactly level k in frameField
-  const top = f.from - 1
-  const out = heights.slice()
-  if (top >= 0) for (let i = 0; i < out.length; i++) if (levelOf(out[i], thresholds) > top) out[i] = centre(top)
+/** Nearest-sample a freeze onto another grid (no-op if the size matches). */
+function resample(f: Freeze, w: number, h: number): Freeze {
+  if (f.w === w && f.h === h) return f
+  const bits = new Uint16Array(w * h)
   for (let y = 0; y < h; y++) {
     const sy = Math.floor((y * f.h) / h) * f.w
-    for (let x = 0; x < w; x++) {
-      const lv = f.levels[sy + Math.floor((x * f.w) / w)]
-      if (lv !== FREE) out[y * w + x] = centre(Math.min(lv, thresholds.length))
-    }
+    for (let x = 0; x < w; x++) bits[y * w + x] = f.bits[sy + Math.floor((x * f.w) / w)]
+  }
+  return { ...f, w, h, bits }
+}
+
+/** Level of a pixel with its locked layers stacked on top of the live output: a present locked layer raises the level to k; absent pixels show the live output. */
+export function lockedLevel(live: number, bits: number, locked: number[]): number {
+  let lv = live
+  for (const k of locked) if (bits & (1 << k)) lv = Math.max(lv, k)
+  return lv
+}
+
+/** Locked layers are overlaid on the live output (see lockedLevel). */
+export function applyFreeze(heights: Float32Array, w: number, h: number, thresholds: number[], f: Freeze | null): Float32Array {
+  if (!f || !f.locked.length) return heights
+  const edges = [0, ...thresholds, 1]
+  const centre = (k: number) => (edges[k] + edges[k + 1]) / 2 // band centre maps to exactly level k in frameField
+  const { bits } = resample(f, w, h)
+  const out = heights.slice()
+  for (let i = 0; i < out.length; i++) {
+    const live = levelOf(out[i], thresholds), lv = lockedLevel(live, bits[i], f.locked)
+    if (lv !== live) out[i] = centre(lv)
   }
   return out
 }
 
-/** Capture the current output's levels >= `from` as a Freeze (composited over any existing freeze). */
-export function captureFreeze(image: ImageBitmap, params: PipelineParams, current: Freeze | null, from: number): Freeze {
+/** Lock layer k: capture its mask from the current output (locks applied) into the freeze; `merge` adds to the existing mask instead of replacing it. */
+export function captureFreeze(image: ImageBitmap, params: PipelineParams, current: Freeze | null, k: number, merge = false): Freeze {
   const { heights, w, h, opts } = sampleHeights(image, params, current)
   const top = params.thresholds.length
-  const levels = Uint8Array.from(heights, (v) => { const k = Math.min(top, levelOf(v, opts.thresholds)); return k >= from ? k : FREE })
-  return { from, w, h, levels }
+  const f = current ? resample(current, w, h) : { locked: [], w, h, bits: new Uint16Array(w * h) }
+  const bits = f.bits.slice()
+  for (let i = 0; i < bits.length; i++) bits[i] = Math.min(top, levelOf(heights[i], opts.thresholds)) >= k ? bits[i] | (1 << k) : merge ? bits[i] : bits[i] & ~(1 << k)
+  return { ...f, bits, locked: [...f.locked.filter((l) => l !== k), k].sort((a, b) => a - b) }
 }
 
-/** One frozen level as pixels: white where the freeze pins that level, higher frozen levels in their gray dimmed (25% alpha) so a cut-through erase is predictable, transparent elsewhere. */
-export function freezeLayerImage(f: Freeze, level: number, steps: number): ImageData {
+/** Unlock layer k; null once nothing is left locked. */
+export function thaw(f: Freeze, k: number): Freeze | null {
+  const locked = f.locked.filter((l) => l !== k)
+  return locked.length ? { ...f, locked } : null
+}
+
+/** Layer k as pixels, white where present, transparent elsewhere: from the freeze if locked, else from the output. */
+export function layerImage(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null, k: number): ImageData {
+  const { heights, w, h, opts } = sampleHeights(image, params, freeze)
+  if (freeze?.locked.includes(k)) return freezeLayerImage(resample(freeze, w, h), k)
+  const top = params.thresholds.length
+  const px = new Uint8ClampedArray(w * h * 4)
+  for (let i = 0; i < heights.length; i++) if (Math.min(top, levelOf(heights[i], opts.thresholds)) >= k) px.set([255, 255, 255, 255], 4 * i)
+  return new ImageData(px, w, h)
+}
+/** Every layer 1..top (one memoised pipeline run). */
+export const layerImages = (image: ImageBitmap, params: PipelineParams, freeze: Freeze | null) =>
+  Array.from({ length: params.thresholds.length }, (_, j) => layerImage(image, params, freeze, j + 1))
+
+/** Level at grid pixel (x, y) of the output, clamped to the image's top level. */
+export function levelAt(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null, x: number, y: number): number {
+  const { heights, w, opts } = sampleHeights(image, params, freeze)
+  return Math.min(params.thresholds.length, levelOf(heights[Math.floor(y) * w + Math.floor(x)], opts.thresholds))
+}
+
+/** One locked layer as pixels: white where present, transparent elsewhere. */
+export function freezeLayerImage(f: Freeze, k: number): ImageData {
   const px = new Uint8ClampedArray(f.w * f.h * 4)
-  for (let i = 0; i < f.levels.length; i++) {
-    const k = f.levels[i]
-    if (k === FREE || k < level) continue
-    const v = k === level ? 255 : Math.round((k / steps) * 255)
-    px.set([v, v, v, k === level ? 255 : 64], 4 * i)
-  }
+  for (let i = 0; i < f.bits.length; i++) if (f.bits[i] & (1 << k)) px.set([255, 255, 255, 255], 4 * i)
   return new ImageData(px, f.w, f.h)
 }
 
 export type BrushMode = 'erase' | 'add'
-/**
- * Round brush of radius r at (cx, cy) in freeze-grid coords on a frozen level. Erase: pixels at `level` or above drop
- * to the level below if that is frozen too, otherwise back to the live pipeline (cuts through higher layers). Add: every
- * pixel under the brush becomes `level`, which also removes it from any higher level. Returns a new Freeze.
- */
-export function brushFreeze(f: Freeze, level: number, cx: number, cy: number, r: number, mode: BrushMode): Freeze {
-  const add = mode === 'add'
-  const to = add ? level : level - 1 >= f.from ? level - 1 : FREE
-  const levels = f.levels.slice()
+/** Round brush of radius r at (cx, cy) in freeze-grid coords: erase clears layer k under it, add sets it. Returns a new Freeze. */
+export function brushFreeze(f: Freeze, k: number, cx: number, cy: number, r: number, mode: BrushMode): Freeze {
+  const bits = f.bits.slice()
   for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(f.h - 1, Math.ceil(cy + r)); y++)
     for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(f.w - 1, Math.ceil(cx + r)); x++) {
       const i = y * f.w + x
-      if ((add || (levels[i] !== FREE && levels[i] >= level)) && (x - cx) ** 2 + (y - cy) ** 2 <= r * r) levels[i] = to
+      if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r) bits[i] = mode === 'add' ? bits[i] | (1 << k) : bits[i] & ~(1 << k)
     }
-  return { ...f, levels }
-}
-
-/** Release the lowest frozen level; null once nothing is left frozen. */
-export function thawLowest(f: Freeze, layers: number): Freeze | null {
-  const from = f.from + 1
-  if (from >= layers) return null
-  return { ...f, from, levels: f.levels.map((k) => (k === f.from ? FREE : k)) }
+  return { ...f, bits }
 }
 
 /** The quantized grayscale as pixels: what the preview shows and the PNG export saves. Frame levels above the image's top print white. */
@@ -349,7 +371,7 @@ function computeHeights(image: ImageBitmap, p: PipelineParams, freeze: Freeze | 
   // Transparent pixels become the background gray, bypassing invert, levels and smoothing.
   for (let i = 0; i < heights.length; i++) if (transparent[i]) heights[i] = p.background / 100
 
-  // 4b. Frozen layers override whatever the live pipeline produced for them.
+  // 4b. Locked layers override whatever the live pipeline produced for them.
   heights = applyFreeze(heights, w, h, thresholds, freeze)
 
   // 5. Frame and convert to layer units (the mesher's field). A fixed base depth overrides the gray for transparent pixels.
