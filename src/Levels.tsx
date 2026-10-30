@@ -10,12 +10,14 @@ function Slider({
   onChange,
   right,
   sections,
+  readout,
 }: {
   label: string;
   values: number[];
   background: string;
   onChange: (v: number[]) => void;
   right?: React.ReactNode;
+  readout?: string; // replaces the default "values%" text after the label
   sections?: React.ReactNode[]; // one caption per gap between the track edges and the handles
 }) {
   const edges = [0, ...values, 100];
@@ -24,7 +26,7 @@ function Slider({
     <div className="flex w-full flex-col gap-1 text-sm">
       <div className="flex justify-between">
         <span>
-          {label}: {values.join(" · ")}%
+          {label}: {readout ?? `${values.join(" · ")}%`}
         </span>
         {right}
       </div>
@@ -144,7 +146,8 @@ export function Levels() {
   const setParam = useStore((s) => s.setParam);
   const setLayers = useStore((s) => s.setLayers);
   const layers = thresholds.length + 1;
-  const depth = (k: number) => ((k + 1) * layerHeightMm).toFixed(2); // print depth of level k, as the select's option value
+  const depth = (k: number) => ((k + 1) * layerHeightMm).toFixed(2); // unflipped depth of level k, as the select's option value
+  const baseLevel = baseMm === "none" ? 0 : Math.min(layers - 1, Math.max(0, Math.round(baseMm / layerHeightMm) - 1));
   const iconBtn =
     "h-6 w-6 rounded border border-gray-400 leading-none disabled:opacity-40";
 
@@ -239,23 +242,20 @@ export function Levels() {
       />
       {hasAlpha && (
         <Slider
-          label="Base"
+          label="Background"
+          readout={
+            baseMm === "none"
+              ? "None"
+              : `${((flipDepth ? layers - baseLevel : baseLevel + 1) * layerHeightMm).toFixed(2)} mm`
+          }
           values={[background]}
           background={`linear-gradient(to right, ${stops.join(", ")})`}
           onChange={([v]) => setParam("background", v)}
           right={
-            <select
-              aria-label="Base depth"
-              value={
-                baseMm === "none"
-                  ? "none"
-                  : depth(
-                      Math.min(
-                        layers - 1,
-                        Math.max(0, Math.round(baseMm / layerHeightMm) - 1),
-                      ),
-                    )
-              }
+            <label className="flex items-center gap-2">
+              Base
+              <select
+              value={baseMm === "none" ? "none" : depth(baseLevel)}
               onChange={(e) => {
                 const v = e.target.value;
                 setParam("baseMm", v === "none" ? v : Number(v));
@@ -265,10 +265,11 @@ export function Levels() {
               <option value="none">None</option>
               {edges.slice(0, -1).map((_, k) => (
                 <option key={k} value={depth(k)}>
-                  {depth(k)} mm
+                  {((flipDepth ? layers - k : k + 1) * layerHeightMm).toFixed(2)} mm
                 </option>
               ))}
             </select>
+            </label>
           }
         />
       )}

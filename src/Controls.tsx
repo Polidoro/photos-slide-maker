@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore as useZustand } from "zustand";
 import { useShallow } from "zustand/shallow";
 import { Tooltip } from "react-tooltip";
@@ -94,14 +94,25 @@ export function Controls() {
   const bitmap = img?.bitmap;
   const freeze = img?.freeze ?? null;
 
+  const [busy, setBusy] = useState(false);
+  const gen = useRef(0); // bumps on every input change so a build that finishes late is discarded
+  // The mesher is synchronous and can take a second, so show "Generating…" first and run it on the next tick.
   const build = useCallback(() => {
-    const st = useStore.getState(), cur = selectImage(st)!;
-    const s = sampleHeights(cur.bitmap, pickParams(st), cur.freeze, st.flipDepth);
-    setStl(buildStl(s.heights, s.w, s.h, s.opts));
+    const g = ++gen.current;
+    setBusy(true);
+    setTimeout(() => {
+      const st = useStore.getState(), cur = selectImage(st);
+      if (g !== gen.current || !cur) return;
+      const s = sampleHeights(cur.bitmap, pickParams(st), cur.freeze, st.flipDepth);
+      setStl(buildStl(s.heights, s.w, s.h, s.opts));
+      setBusy(false);
+    }, 0);
   }, []);
   // Drop the cached mesh after a committed param change (never mid-drag) or an image switch; rebuild if Autogenerate is on.
   useEffect(() => {
+    gen.current++;
     setStl(null);
+    setBusy(false);
     if (!bitmap || !autogen) return;
     const id = setTimeout(build, 150);
     return () => clearTimeout(id);
@@ -298,11 +309,11 @@ export function Controls() {
         </p>
       </div>
       <button
-        disabled={autogen && !stl}
+        disabled={busy || (autogen && !stl)}
         onClick={() => (stl ? downloadBlob(stl, stem + ".stl") : build())}
         className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
       >
-        {stl ? "Download STL" : autogen ? "Generating…" : "Generate STL"}
+        {stl ? "Download STL" : busy || autogen ? "Generating…" : "Generate STL"}
       </button>
       <div className="flex justify-between text-sm">
         <label className="flex items-center gap-2">

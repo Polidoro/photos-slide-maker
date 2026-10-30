@@ -106,13 +106,20 @@ test('flipDepth mirrors image levels but not the frame', () => {
   expect(levelOf(heights[12], thresholds)).toBe(1) // dark -> top image level
   expect(levelOf(heights[6], thresholds)).toBe(0) // light interior -> bottom
   expect(levelOf(heights[0], thresholds)).toBe(1) // 1 mm frame at 0.5 mm layers is level 1 either way
+  // the base is on the image's level scale, so a level-0 (black) base flips to the top like black pixels
+  const mask = Uint8Array.from({ length: 25 }, (_, i) => (i === 7 ? 1 : 0))
+  const b = frameField(f, 5, 5, { ...p, frame: 'none' }, { mask, level: 0 })
+  expect(levelOf(b.heights[7], b.thresholds)).toBe(1)
+  expect(levelOf(b.heights[7], b.thresholds)).toBe(levelOf(b.heights[12], b.thresholds))
+  expect(frameField(f, 5, 5, { ...p, frame: 'none' }, { mask, level: -1 }).heights[7]).toBe(-1) // void stays void
 })
 
-test('brushFreeze: erase drops to the frozen level below or frees; add claims pixels from every level', () => {
+test('brushFreeze: erase cuts this level and above down to the frozen level below or frees; add claims pixels from every level', () => {
   const f = { from: 1, w: 3, h: 1, levels: Uint8Array.from([2, 2, 1]) }
   expect(Array.from(brushFreeze(f, 2, 0, 0, 0.5, 'erase').levels)).toEqual([1, 2, 1]) // level 1 is frozen: drop to it
   expect(Array.from(brushFreeze(f, 1, 2, 0, 0.5, 'erase').levels)).toEqual([2, 2, 255]) // nothing frozen below: free
-  expect(Array.from(brushFreeze(f, 2, 0, 0, 5, 'erase').levels)).toEqual([1, 1, 1]) // big brush, only level-2 pixels change
+  expect(Array.from(brushFreeze(f, 2, 0, 0, 5, 'erase').levels)).toEqual([1, 1, 1]) // big brush, level-2 pixels change, level 1 stays
+  expect(Array.from(brushFreeze({ ...f, levels: Uint8Array.from([3, 2, 255]) }, 2, 1, 0, 5, 'erase').levels)).toEqual([1, 1, 255]) // cuts through level 3; free pixels stay free
   expect(Array.from(brushFreeze({ ...f, levels: Uint8Array.from([255, 1, 2]) }, 1, 1, 0, 5, 'add').levels)).toEqual([1, 1, 1]) // add: free, lower and higher all become this level
   expect(f.levels[0]).toBe(2) // input untouched
 })

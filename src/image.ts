@@ -89,19 +89,23 @@ export function captureFreeze(image: ImageBitmap, params: PipelineParams, curren
   return { from, w, h, levels }
 }
 
-/** One frozen level as pixels: its gray where the freeze pins that level, transparent elsewhere. */
+/** One frozen level as pixels: white where the freeze pins that level, higher frozen levels in their gray dimmed (25% alpha) so a cut-through erase is predictable, transparent elsewhere. */
 export function freezeLayerImage(f: Freeze, level: number, steps: number): ImageData {
   const px = new Uint8ClampedArray(f.w * f.h * 4)
-  const v = Math.round((level / steps) * 255)
-  for (let i = 0; i < f.levels.length; i++) if (f.levels[i] === level) px.set([v, v, v, 255], 4 * i)
+  for (let i = 0; i < f.levels.length; i++) {
+    const k = f.levels[i]
+    if (k === FREE || k < level) continue
+    const v = k === level ? 255 : Math.round((k / steps) * 255)
+    px.set([v, v, v, k === level ? 255 : 64], 4 * i)
+  }
   return new ImageData(px, f.w, f.h)
 }
 
 export type BrushMode = 'erase' | 'add'
 /**
- * Round brush of radius r at (cx, cy) in freeze-grid coords on a frozen level. Erase: pixels of `level` drop to the
- * level below if that is frozen too, otherwise back to the live pipeline. Add: every pixel under the brush becomes
- * `level`, which also removes it from any higher level (one array, one level per pixel). Returns a new Freeze.
+ * Round brush of radius r at (cx, cy) in freeze-grid coords on a frozen level. Erase: pixels at `level` or above drop
+ * to the level below if that is frozen too, otherwise back to the live pipeline (cuts through higher layers). Add: every
+ * pixel under the brush becomes `level`, which also removes it from any higher level. Returns a new Freeze.
  */
 export function brushFreeze(f: Freeze, level: number, cx: number, cy: number, r: number, mode: BrushMode): Freeze {
   const add = mode === 'add'
@@ -110,7 +114,7 @@ export function brushFreeze(f: Freeze, level: number, cx: number, cy: number, r:
   for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(f.h - 1, Math.ceil(cy + r)); y++)
     for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(f.w - 1, Math.ceil(cx + r)); x++) {
       const i = y * f.w + x
-      if ((add || levels[i] === level) && (x - cx) ** 2 + (y - cy) ** 2 <= r * r) levels[i] = to
+      if ((add || (levels[i] !== FREE && levels[i] >= level)) && (x - cx) ** 2 + (y - cy) ** 2 <= r * r) levels[i] = to
     }
   return { ...f, levels }
 }
@@ -165,9 +169,11 @@ const levelToField = (thresholds: number[]) => piecewise([0, ...thresholds.map((
 export function frameField(src: Float32Array, w: number, h: number, p: Pick<PipelineParams, 'frame' | 'thresholds' | 'layerHeightMm' | 'widthMm' | 'heightMm'> & { flipDepth?: boolean }, base?: { mask: Uint8Array; level: number }) {
   const T = thresholdsOf(p.thresholds), L = T.length + 1
   let heights = src.map(piecewise([0, ...T, 1], [0, ...T.map((_, i) => i + 0.5), L - 1]))
-  if (p.flipDepth) heights = heights.map((v) => L - 1 - v) // image levels only; frame and base are applied after
-  // Transparent pixels at a fixed layer (or -1 = void, left out of the mesh). The frame still wins at the edges.
-  if (base) for (let i = 0; i < heights.length; i++) if (base.mask[i]) heights[i] = base.level
+  if (p.flipDepth) heights = heights.map((v) => L - 1 - v) // image levels only; the frame is applied after
+  // Transparent pixels at a level (or -1 = void, left out of the mesh). The base is a level on the image's scale, so it
+  // flips with the image: a black base prints at the same height as the black level. The frame still wins at the edges.
+  const baseLevel = base && p.flipDepth && base.level >= 0 && base.level < L ? L - 1 - base.level : base?.level
+  if (base) for (let i = 0; i < heights.length; i++) if (base.mask[i]) heights[i] = baseLevel!
   const top = Math.round(1 / p.layerHeightMm) - 1
   const heightMm = p.heightMm ?? (p.widthMm * (h - 1)) / (w - 1)
   const mmx = p.widthMm / (w - 1), mmy = heightMm / (h - 1) // grid pitch in mm per axis
@@ -183,7 +189,7 @@ export function frameField(src: Float32Array, w: number, h: number, p: Pick<Pipe
         else if (dx < 1) u = top
         if (u !== null) heights[y * w + x] = u
       }
-  const n = Math.max(L - 1, p.frame === 'none' ? 0 : top, base?.level ?? 0) + 1
+  const n = Math.max(L - 1, p.frame === 'none' ? 0 : top, baseLevel ?? 0) + 1
   const thresholds = Array.from({ length: n - 1 }, (_, j) => j + 0.5)
   return { heights, thresholds, baseMm: p.layerHeightMm, maxHeightMm: (n - 1) * p.layerHeightMm, widthMm: p.widthMm, heightMm }
 }
