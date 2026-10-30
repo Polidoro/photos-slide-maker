@@ -116,13 +116,15 @@ test('brushFreeze: erase clears only this layer under the brush, add sets it; th
   expect(thaw(thaw(f, 2)!, 1)).toBeNull()
 })
 
-test('locked layers stack on top of the live level: present raises to k, absent leaves the live output', () => {
+test('locked layers paint over the live level, lowest first: present becomes k, absent shows through', () => {
   expect(lockedLevel(3, 0b000, [])).toBe(3)
-  expect(lockedLevel(0, 0b010, [1])).toBe(1) // present raises
+  expect(lockedLevel(0, 0b010, [1])).toBe(1) // present paints up
+  expect(lockedLevel(3, 0b010, [1])).toBe(1) // present paints down too: covers the live white
   expect(lockedLevel(3, 0b000, [1])).toBe(3) // absent: live shows through
-  expect(lockedLevel(0, 0b1000, [1, 3])).toBe(3)
+  expect(lockedLevel(0, 0b1010, [1, 3])).toBe(3) // higher locked layer is painted last
   // applyFreeze snaps changed pixels to the band centre of the new level and nearest-samples a 1-wide freeze onto 2 pixels
   const out = applyFreeze(Float32Array.from([0.9, 0.1]), 2, 1, [0.5], { locked: [1], w: 1, h: 1, bits: Uint16Array.of(0b010) })
   expect(out[0]).toBeCloseTo(0.9)
   expect(out[1]).toBe(0.75)
+  expect(applyFreeze(Float32Array.from([0.1]), 1, 1, [0.5], { locked: [1], hidden: [1], w: 1, h: 1, bits: Uint16Array.of(0b010) })[0]).toBeCloseTo(0.1) // hidden: left out
 })

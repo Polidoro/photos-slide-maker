@@ -60,7 +60,7 @@ export function hasAlpha(image: ImageBitmap): boolean {
  * `bits[i]` has bit k set where layer k is present at grid pixel i; only bits of layers in `locked` mean anything.
  * Stored at the grid size it was captured at and nearest-sampled onto the current grid, so it survives width/nozzle changes.
  */
-export type Freeze = { locked: number[]; w: number; h: number; bits: Uint16Array }
+export type Freeze = { locked: number[]; hidden?: number[]; w: number; h: number; bits: Uint16Array } // hidden: locked layers left out of the output (preview and STL)
 
 /** Nearest-sample a freeze onto another grid (no-op if the size matches). */
 function resample(f: Freeze, w: number, h: number): Freeze {
@@ -73,10 +73,10 @@ function resample(f: Freeze, w: number, h: number): Freeze {
   return { ...f, w, h, bits }
 }
 
-/** Level of a pixel with its locked layers stacked on top of the live output: a present locked layer raises the level to k; absent pixels show the live output. */
+/** Level of a pixel with its locked layers painted over the live output, lowest first: a present locked pixel becomes level k (covering whatever is below); absent pixels show through. */
 export function lockedLevel(live: number, bits: number, locked: number[]): number {
   let lv = live
-  for (const k of locked) if (bits & (1 << k)) lv = Math.max(lv, k)
+  for (const k of locked) if (bits & (1 << k)) lv = k
   return lv
 }
 
@@ -86,9 +86,10 @@ export function applyFreeze(heights: Float32Array, w: number, h: number, thresho
   const edges = [0, ...thresholds, 1]
   const centre = (k: number) => (edges[k] + edges[k + 1]) / 2 // band centre maps to exactly level k in frameField
   const { bits } = resample(f, w, h)
+  const shown = f.locked.filter((k) => !f.hidden?.includes(k))
   const out = heights.slice()
   for (let i = 0; i < out.length; i++) {
-    const live = levelOf(out[i], thresholds), lv = lockedLevel(live, bits[i], f.locked)
+    const live = levelOf(out[i], thresholds), lv = lockedLevel(live, bits[i], shown)
     if (lv !== live) out[i] = centre(lv)
   }
   return out
@@ -96,37 +97,38 @@ export function applyFreeze(heights: Float32Array, w: number, h: number, thresho
 
 /** Lock layer k: capture its mask from the current output (locks applied) into the freeze; `merge` adds to the existing mask instead of replacing it. */
 export function captureFreeze(image: ImageBitmap, params: PipelineParams, current: Freeze | null, k: number, merge = false): Freeze {
-  const { heights, w, h, opts } = sampleHeights(image, params, current)
+  const { heights, w, h, opts, transparent } = sampleHeights(image, params, current)
   const top = params.thresholds.length
   const f = current ? resample(current, w, h) : { locked: [], w, h, bits: new Uint16Array(w * h) }
   const bits = f.bits.slice()
-  for (let i = 0; i < bits.length; i++) bits[i] = Math.min(top, levelOf(heights[i], opts.thresholds)) >= k ? bits[i] | (1 << k) : merge ? bits[i] : bits[i] & ~(1 << k)
+  for (let i = 0; i < bits.length; i++) bits[i] = !transparent[i] && Math.min(top, levelOf(heights[i], opts.thresholds)) >= k ? bits[i] | (1 << k) : merge ? bits[i] : bits[i] & ~(1 << k)
   return { ...f, bits, locked: [...f.locked.filter((l) => l !== k), k].sort((a, b) => a - b) }
 }
 
 /** Unlock layer k; null once nothing is left locked. */
 export function thaw(f: Freeze, k: number): Freeze | null {
   const locked = f.locked.filter((l) => l !== k)
-  return locked.length ? { ...f, locked } : null
+  return locked.length ? { ...f, locked, hidden: f.hidden?.filter((l) => l !== k) } : null
 }
 
-/** Layer k as pixels, white where present, transparent elsewhere: from the freeze if locked, else from the output. */
+/** Layer k as pixels, white where present, transparent elsewhere (the image's transparent pixels are never part of a layer): from the freeze if locked, else from the output. */
 export function layerImage(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null, k: number): ImageData {
-  const { heights, w, h, opts } = sampleHeights(image, params, freeze)
+  const { heights, w, h, opts, transparent } = sampleHeights(image, params, freeze)
   if (freeze?.locked.includes(k)) return freezeLayerImage(resample(freeze, w, h), k)
   const top = params.thresholds.length
   const px = new Uint8ClampedArray(w * h * 4)
-  for (let i = 0; i < heights.length; i++) if (Math.min(top, levelOf(heights[i], opts.thresholds)) >= k) px.set([255, 255, 255, 255], 4 * i)
+  for (let i = 0; i < heights.length; i++) if (!transparent[i] && Math.min(top, levelOf(heights[i], opts.thresholds)) >= k) px.set([255, 255, 255, 255], 4 * i)
   return new ImageData(px, w, h)
 }
-/** Every layer 1..top (one memoised pipeline run). */
+/** Every layer 0..top (one memoised pipeline run). */
 export const layerImages = (image: ImageBitmap, params: PipelineParams, freeze: Freeze | null) =>
-  Array.from({ length: params.thresholds.length }, (_, j) => layerImage(image, params, freeze, j + 1))
+  Array.from({ length: params.thresholds.length + 1 }, (_, k) => layerImage(image, params, freeze, k))
 
-/** Level at grid pixel (x, y) of the output, clamped to the image's top level. */
+/** Level at grid pixel (x, y) of the output, clamped to the image's top level; -1 where the image is transparent. */
 export function levelAt(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null, x: number, y: number): number {
-  const { heights, w, opts } = sampleHeights(image, params, freeze)
-  return Math.min(params.thresholds.length, levelOf(heights[Math.floor(y) * w + Math.floor(x)], opts.thresholds))
+  const { heights, w, opts, transparent } = sampleHeights(image, params, freeze)
+  const i = Math.floor(y) * w + Math.floor(x)
+  return transparent[i] ? -1 : Math.min(params.thresholds.length, levelOf(heights[i], opts.thresholds))
 }
 
 /** One locked layer as pixels: white where present, transparent elsewhere. */
@@ -377,7 +379,7 @@ function computeHeights(image: ImageBitmap, p: PipelineParams, freeze: Freeze | 
   // 5. Frame and convert to layer units (the mesher's field). A fixed base depth overrides the gray for transparent pixels.
   const base = { mask: transparent, level: p.baseMm === 'none' ? -1 : Math.max(0, Math.round(p.baseMm / p.layerHeightMm) - 1) }
   const { heights: framed, ...opts } = frameField(heights, w, h, { ...p, flipDepth }, base)
-  return { heights: framed, w, h, opts }
+  return { heights: framed, w, h, opts, transparent }
 }
 
 // Single-entry memo: the preview and the STL build ask for the same result back to back.

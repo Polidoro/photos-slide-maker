@@ -118,7 +118,7 @@ export function Preview({ opacity, brush, mode, onBrush }: { opacity: number; br
           if (editLevel !== null || !image) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const k = levelAt(image, params, freeze, ((e.clientX - rect.left) / rect.width) * e.currentTarget.width, ((e.clientY - rect.top) / rect.height) * e.currentTarget.height);
-          if (k > 0) setEditLevel(k); // level 0 is the base slab: nothing to edit
+          if (k >= 0) setEditLevel(k); // transparent pixels belong to no layer
         }}
         onPointerMove={(e) => {
           if (editLevel === null) return;

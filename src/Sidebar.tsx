@@ -42,16 +42,16 @@ function Layers() {
   // One frame of throttling, like the preview; one pipeline run (memoised) yields every layer.
   useEffect(() => {
     if (!image) return
-    const id = requestAnimationFrame(() => layerImages(image.bitmap, params, freeze).forEach((data, j) => { const c = canvases.current[j]; if (c) drawMask(c, data) }))
+    const id = requestAnimationFrame(() => layerImages(image.bitmap, params, freeze).forEach((data, k) => { const c = canvases.current[k]; if (c) drawMask(c, data) }))
     return () => cancelAnimationFrame(id)
   }, [image, params, freeze])
   if (!image) return <p className="p-2 text-xs text-gray-500">No image</p>
   const lock = (k: number, merge = false) => captureFreeze(image.bitmap, params, freeze, k, merge)
   const btn = (on: boolean) => `rounded border p-1 disabled:opacity-30 ${on ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-400'}`
-  // Top layer first; layer 0 is the base slab (present everywhere), so it isn't listed.
-  return Array.from({ length: layers - 1 }, (_, j) => {
-    const k = j + 1
+  // Top layer first, down to layer 0 (the darkest; everything but void).
+  return Array.from({ length: layers }, (_, k) => {
     const locked = freeze?.locked.includes(k) ?? false
+    const hidden = freeze?.hidden?.includes(k) ?? false
     return (
       <div
         key={k}
@@ -59,7 +59,7 @@ function Layers() {
         title={editLevel === k ? 'Show full preview' : 'Edit this layer'}
         className={`shrink-0 cursor-pointer rounded border-2 p-1 ${k === editLevel ? 'border-blue-600' : 'border-transparent'}`}
       >
-        <canvas ref={(c) => { canvases.current[j] = c }} className="block h-auto w-full" />
+        <canvas ref={(c) => { canvases.current[k] = c }} className="block h-auto w-full" />
         <div className="flex justify-between pt-1">
           <button
             aria-label={locked ? `Unlock layer ${k}` : `Lock layer ${k}`}
@@ -70,6 +70,19 @@ function Layers() {
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <rect x="4" y="11" width="16" height="10" rx="2" fill={locked ? 'currentColor' : 'none'} />
               <path d={locked ? 'M8 11V7a4 4 0 0 1 8 0v4' : 'M8 11V7a4 4 0 0 1 7.5-2'} />
+            </svg>
+          </button>
+          <button
+            aria-label={hidden ? `Show layer ${k}` : `Hide layer ${k}`}
+            aria-pressed={!hidden}
+            disabled={!locked}
+            onClick={(e) => { e.stopPropagation(); setFreeze({ ...freeze!, hidden: hidden ? freeze!.hidden!.filter((l) => l !== k) : [...(freeze!.hidden ?? []), k] }) }}
+            className={btn(locked && !hidden)}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z" />
+              <circle cx="12" cy="12" r="3" />
+              {hidden && <path d="M3 3l18 18" />}
             </svg>
           </button>
           <button
