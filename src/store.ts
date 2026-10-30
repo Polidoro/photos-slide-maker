@@ -26,7 +26,7 @@ export type Params = {
 export type Img = { id: number; bitmap: ImageBitmap; name: string; hasAlpha: boolean; freeze: Freeze | null }
 
 const respace = (layers: number) => Array.from({ length: layers - 1 }, (_, k) => Math.round(((k + 1) * 100) / layers))
-const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, background: 0, baseMm: 0.15, thresholds: respace(4), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: false, frame: 'none' }
+export const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, background: 0, baseMm: 0.15, thresholds: respace(4), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: true, frame: 'mixed' }
 const PARAM_KEYS = Object.keys(DEFAULTS) as (keyof Params)[]
 export const pickParams = (s: Params): Params => Object.fromEntries(PARAM_KEYS.map((k) => [k, s[k]])) as Params
 const FRAMES = ['none', 'flat', 'tapered', 'mixed']

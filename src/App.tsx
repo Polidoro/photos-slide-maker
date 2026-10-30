@@ -130,7 +130,7 @@ export default function App() {
                 {image.bitmap.width}×{image.bitmap.height} px
               </span>
             </div>
-            <Preview opacity={opacity} brush={brush} mode={mode} />
+            <Preview opacity={opacity} brush={brush} mode={mode} onBrush={setBrush} />
             <Levels />
           </>
         ) : (

@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/shallow";
-import { brushFreeze, freezeLayerImage, quantizedImage, type BrushMode, type Freeze } from "./image";
-import { pickParams, selectEditLevel, selectImage, useStore } from "./store";
+import { brushFreeze, fit, freezeLayerImage, gridSize, quantizedImage, type BrushMode, type Freeze } from "./image";
+import { pickParams, selectEditLevel, selectImage, useStore, type Params } from "./store";
 
-export function Preview({ opacity, brush, mode }: { opacity: number; brush: number; mode: BrushMode }) {
+// Edit view: the freeze is stored at its capture grid, so scale it (nearest) onto the current grid to keep the canvas size steady.
+function drawLayer(canvas: HTMLCanvasElement, f: Freeze, k: number, image: ImageBitmap, p: Params) {
+  const { w, h } = fit(image, gridSize(p.widthMm, p.nozzleMm));
+  const layer = new OffscreenCanvas(f.w, f.h);
+  layer.getContext("2d")!.putImageData(freezeLayerImage(f, k, p.thresholds.length), 0, 0);
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(layer, 0, 0, w, h);
+}
+
+export function Preview({ opacity, brush, mode, onBrush }: { opacity: number; brush: number; mode: BrushMode; onBrush: (r: number) => void }) {
   const img = useStore(selectImage);
   const image = img?.bitmap;
   const freeze = img?.freeze ?? null;
@@ -36,6 +48,27 @@ export function Preview({ opacity, brush, mode }: { opacity: number; brush: numb
   const commitStroke = useStore((s) => s.commitStroke);
   const cursor = useRef<HTMLDivElement>(null); // red ring showing the erase area; moved via the DOM to skip re-renders
   const stroke = useRef<Freeze | null>(null); // in-progress brush stroke; committed to the store on pointer up
+
+  // Wheel over the canvas in edit mode resizes the brush (up = bigger). Native listener so the page scroll can be prevented.
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas || editLevel === null) return;
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const next = Math.min(10, Math.max(1, brush - Math.sign(e.deltaY)));
+      if (next === brush) return;
+      onBrush(next);
+      const c = cursor.current, f = freeze;
+      if (!c || !f || c.style.display === "none") return;
+      const rect = canvas.getBoundingClientRect();
+      const d = (2 * next * rect.width) / f.w; // resize the ring in place, keeping its centre
+      c.style.width = c.style.height = `${d}px`;
+      c.style.left = `${e.clientX - rect.left - d / 2}px`;
+      c.style.top = `${e.clientY - rect.top - d / 2}px`;
+    };
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", wheel);
+  }, [editLevel, freeze, onBrush, brush]);
   const ref = useRef<HTMLCanvasElement>(null);
   const src = useRef<HTMLCanvasElement>(null);
 
@@ -51,11 +84,9 @@ export function Preview({ opacity, brush, mode }: { opacity: number; brush: numb
   useEffect(() => {
     if (!image) return;
     const id = requestAnimationFrame(() => {
-      const img =
-        level !== null
-          ? freezeLayerImage(freeze!, level, params.thresholds.length)
-          : quantizedImage(image, params, freeze);
       const canvas = ref.current!;
+      if (level !== null) return drawLayer(canvas, freeze!, level, image, params);
+      const img = quantizedImage(image, params, freeze);
       canvas.width = img.width;
       canvas.height = img.height;
       canvas.getContext("2d")!.putImageData(img, 0, 0);
@@ -70,7 +101,7 @@ export function Preview({ opacity, brush, mode }: { opacity: number; brush: numb
     const rect = e.currentTarget.getBoundingClientRect();
     const next = brushFreeze(f, level, ((e.clientX - rect.left) / rect.width) * f.w, ((e.clientY - rect.top) / rect.height) * f.h, brush, brushMode);
     stroke.current = next;
-    e.currentTarget.getContext("2d")!.putImageData(freezeLayerImage(next, level, params.thresholds.length), 0, 0);
+    drawLayer(e.currentTarget, next, level, image!, params);
   }
   const endStroke = () => {
     if (stroke.current && stroke.current !== freeze) commitStroke(stroke.current);

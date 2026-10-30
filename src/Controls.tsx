@@ -6,7 +6,7 @@ import "react-tooltip/dist/react-tooltip.css";
 import { downloadBlob } from "./download";
 import { fit, gridSize, quantizedImage, sampleHeights } from "./image";
 import { buildStl } from "./stl";
-import { isParams, pickParams, selectImage, useStore } from "./store";
+import { DEFAULTS, isParams, pickParams, selectImage, useStore, type Params } from "./store";
 
 const inputCls =
   "rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800";
@@ -14,27 +14,29 @@ const btnCls =
   "rounded border border-gray-300 px-3 py-1 text-sm disabled:opacity-40 dark:border-gray-600";
 
 /** Range input with the label on the left and the value (or "Off" at 0) on the right. */
+type NumParam = { [K in keyof Params]: Params[K] extends number ? K : never }[keyof Params];
 function Slider({
   label,
   help,
-  value,
+  param,
   min = 0,
   max,
   step,
   unit,
-  onChange,
 }: {
   label: string;
   help: string;
-  value: number;
+  param: NumParam; // store key; the slider reads, writes and resets it
   min?: number;
   max: number;
   step: number;
   unit: string;
-  onChange: (v: number) => void;
 }) {
+  const value = useStore((s) => s[param]);
+  const setParam = useStore((s) => s.setParam);
   const setDragging = useStore((s) => s.setDragging);
   const decimals = step < 1 ? String(step).split(".")[1].length : 0;
+  const isDefault = value === DEFAULTS[param];
   return (
     <label className="flex flex-col gap-1 text-sm">
       <span className="flex justify-between">
@@ -45,7 +47,23 @@ function Slider({
         >
           {label}
         </span>
-        <span className="text-gray-500 dark:text-gray-400">
+        <span className="flex items-center gap-1 text-gray-500 dark:text-gray-400">
+          <button
+            type="button"
+            aria-label={`Reset ${label}`}
+            title={`Reset to ${DEFAULTS[param]}${unit}`}
+            disabled={isDefault}
+            className="disabled:opacity-20"
+            onClick={(e) => {
+              e.preventDefault(); // inside the <label>: don't focus the range
+              setParam(param, DEFAULTS[param]);
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 1 0 3-6.7" />
+              <path d="M3 4v5h5" />
+            </svg>
+          </button>
           {value === 0 ? "Off" : value.toFixed(decimals) + unit}
         </span>
       </span>
@@ -56,7 +74,7 @@ function Slider({
         step={step}
         value={value}
         onPointerDown={() => setDragging(true)}
-        onChange={(e) => onChange(e.target.valueAsNumber)}
+        onChange={(e) => setParam(param, e.target.valueAsNumber)}
       />
     </label>
   );
@@ -81,7 +99,7 @@ function MmInput({ value, onCommit }: { value: number; onCommit: (v: number) => 
 export function Controls() {
   const img = useStore(selectImage);
   const reset = useStore((s) => s.reset);
-  const { contrast, saturation, lightness, gamma, shadows, highlights, median, bilateral, smoothing, edgeTolerance, hysteresis, widthMm, heightMm, minFeatureMm, layerHeightMm, nozzleMm, frame, flipDepth } = useStore(useShallow(pickParams));
+  const { bilateral, widthMm, heightMm, layerHeightMm, nozzleMm, frame, flipDepth } = useStore(useShallow(pickParams));
   const setParam = useStore((s) => s.setParam);
   const setParams = useStore((s) => s.setParams);
   // zundo's history arrays change exactly when a tracked param change is recorded, undone or redone.
@@ -142,68 +160,62 @@ export function Controls() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Slider label="Contrast" help="Stretches (positive) or flattens (negative) the difference between light and dark areas before the image is turned to gray." value={contrast} min={-100} max={100} step={1} unit="%" onChange={(v) => setParam("contrast", v)} />
-      <Slider label="Saturation" help="Boosts or removes colour before the gray conversion. Changes how strongly red and blue areas count against green ones; no effect on gray images." value={saturation} min={-100} max={100} step={1} unit="%" onChange={(v) => setParam("saturation", v)} />
-      <Slider label="Lightness" help="Shifts every gray value up or down by this amount." value={lightness} min={-100} max={100} step={1} unit="%" onChange={(v) => setParam("lightness", v)} />
-      <Slider label="Gamma" help="Bends the midtones without moving black or white. Above 1 brightens midtones; below 1 darkens them." value={gamma} min={0.2} max={3} step={0.01} unit="" onChange={(v) => setParam("gamma", v)} />
-      <Slider label="Shadows" help="Lifts (positive) or crushes (negative) the dark end of the range, leaving white untouched." value={shadows} min={-100} max={100} step={1} unit="%" onChange={(v) => setParam("shadows", v)} />
-      <Slider label="Highlights" help="Brightens (positive) or pulls down (negative) the light end of the range, leaving black untouched." value={highlights} min={-100} max={100} step={1} unit="%" onChange={(v) => setParam("highlights", v)} />
+      <Slider label="Contrast" help="Stretches (positive) or flattens (negative) the difference between light and dark areas before the image is turned to gray." param="contrast" min={-100} max={100} step={1} unit="%" />
+      <Slider label="Saturation" help="Boosts or removes colour before the gray conversion. Changes how strongly red and blue areas count against green ones; no effect on gray images." param="saturation" min={-100} max={100} step={1} unit="%" />
+      <Slider label="Lightness" help="Shifts every gray value up or down by this amount." param="lightness" min={-100} max={100} step={1} unit="%" />
+      <Slider label="Gamma" help="Bends the midtones without moving black or white. Above 1 brightens midtones; below 1 darkens them." param="gamma" min={0.2} max={3} step={0.01} unit="" />
+      <Slider label="Shadows" help="Lifts (positive) or crushes (negative) the dark end of the range, leaving white untouched." param="shadows" min={-100} max={100} step={1} unit="%" />
+      <Slider label="Highlights" help="Brightens (positive) or pulls down (negative) the light end of the range, leaving black untouched." param="highlights" min={-100} max={100} step={1} unit="%" />
       <Slider
         label="Median"
         help="Replaces each pixel with the median of its neighbourhood. Removes speckle and grain before the image is split into layers, while keeping hard edges. Value is the window radius as a share of the image size."
-        value={median}
+        param="median"
         max={10}
         step={0.01}
         unit="%"
-        onChange={(v) => setParam("median", v)}
       />
       <Slider
         label="Bilateral"
         help="Averages each pixel with nearby pixels of similar brightness only. Smooths gradients and noise in flat areas without blurring across edges. Value is the radius; use Edge tolerance to set what counts as an edge."
-        value={bilateral}
+        param="bilateral"
         max={100}
         step={1}
         unit="%"
-        onChange={(v) => setParam("bilateral", v)}
       />
       {bilateral > 0 && (
         <Slider
           label="Edge tolerance"
           help="How different in brightness a neighbour must be before the bilateral filter treats it as across an edge and ignores it. Lower keeps more detail; higher smooths more aggressively."
-          value={edgeTolerance}
+          param="edgeTolerance"
           min={1}
           max={50}
           step={1}
           unit="%"
-          onChange={(v) => setParam("edgeTolerance", v)}
         />
       )}
       <Slider
         label="Band tolerance"
         help="Dead band around each level boundary. Pixels within this distance of a boundary join the upper level only where they touch an area clearly above it. Stops noise near a boundary from flickering between two layers."
-        value={hysteresis}
+        param="hysteresis"
         max={20}
         step={0.5}
         unit="%"
-        onChange={(v) => setParam("hysteresis", v)}
       />
       <Slider
         label="Min feature"
         help="Removes islands and fills holes narrower than this size, per layer, so the print has no specks smaller than the nozzle can reproduce. Measured in millimetres at the chosen Width."
-        value={minFeatureMm}
+        param="minFeatureMm"
         max={5}
         step={0.01}
         unit=" mm"
-        onChange={(v) => setParam("minFeatureMm", v)}
       />
       <Slider
         label="Outline smoothing"
         help="Rounds the outline of each layer after cleanup, like sanding the corners. Smooths each layer's shape without creating new intermediate layers. Value is the blur radius as a share of the image size."
-        value={smoothing}
+        param="smoothing"
         max={10}
         step={0.01}
         unit="%"
-        onChange={(v) => setParam("smoothing", v)}
       />
       <label className="flex flex-col gap-1 text-sm">
         <span
