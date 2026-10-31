@@ -1,123 +1,276 @@
-import { useEffect, useRef } from 'react'
-import { useShallow } from 'zustand/shallow'
-import { captureFreeze, fit, layerImages, thaw } from './image'
-import { pickParams, selectEditLevel, selectImage, useStore } from './store'
+import { useEffect, useRef } from "react";
+import { useShallow } from "zustand/shallow";
+import { captureFreeze, fit, layerImage, maxLayers, thaw } from "./image";
+import {
+  levelLayersAt,
+  pickParams,
+  selectBackground,
+  selectEditLevel,
+  selectImage,
+  useStore,
+} from "./store";
 
 function Thumb({ bitmap }: { bitmap: ImageBitmap }) {
-  const ref = useRef<HTMLCanvasElement>(null)
+  const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const c = ref.current!
-    const { w, h } = fit(bitmap, 96, 1)
-    c.width = w
-    c.height = h
-    c.getContext('2d')!.drawImage(bitmap, 0, 0, c.width, c.height)
-  }, [bitmap])
-  return <canvas ref={ref} className="block max-h-24 max-w-full object-contain" />
+    const c = ref.current!;
+    const { w, h } = fit(bitmap, 96, 1);
+    c.width = w;
+    c.height = h;
+    c.getContext("2d")!.drawImage(bitmap, 0, 0, c.width, c.height);
+  }, [bitmap]);
+  return (
+    <canvas ref={ref} className="block max-h-24 max-w-full object-contain" />
+  );
 }
 
 /** Draw a layer mask white on dark gray at thumbnail size. */
 function drawMask(c: HTMLCanvasElement, data: ImageData) {
-  const { w, h } = fit(data, 128, 1)
-  c.width = w
-  c.height = h
-  const ctx = c.getContext('2d')!
-  ctx.fillStyle = '#555'
-  ctx.fillRect(0, 0, w, h)
-  const src = new OffscreenCanvas(data.width, data.height)
-  src.getContext('2d')!.putImageData(data, 0, 0)
-  ctx.drawImage(src, 0, 0, w, h)
+  const { w, h } = fit(data, 128, 1);
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#555";
+  ctx.fillRect(0, 0, w, h);
+  const src = new OffscreenCanvas(data.width, data.height);
+  src.getContext("2d")!.putImageData(data, 0, 0);
+  ctx.drawImage(src, 0, 0, w, h);
 }
 
-const tab = (on: boolean) => `flex-1 border-b-2 px-2 py-1 text-sm ${on ? 'border-blue-600 font-semibold' : 'border-transparent text-gray-500'}`
+const tab = (on: boolean) =>
+  `flex-1 border-b-2 px-2 py-1 text-sm ${on ? "border-blue-600 font-semibold" : "border-transparent text-gray-500"}`;
 
 function Layers() {
-  const image = useStore(selectImage)
-  const params = useStore(useShallow(pickParams))
-  const freeze = image?.freeze ?? null
-  const editLevel = useStore(selectEditLevel)
-  const setEditLevel = useStore((s) => s.setEditLevel)
-  const setFreeze = useStore((s) => s.setFreeze)
-  const layers = params.thresholds.length + 1
-  const canvases = useRef<(HTMLCanvasElement | null)[]>([])
+  const image = useStore(selectImage);
+  const params = useStore(useShallow(pickParams));
+  const freeze = image?.freeze ?? null;
+  const editLevel = useStore(selectEditLevel);
+  const setEditLevel = useStore((s) => s.setEditLevel);
+  const setFreeze = useStore((s) => s.setFreeze);
+  const setParam = useStore((s) => s.setParam);
+  const layers = params.thresholds.length + 1;
+  const background = useStore(selectBackground); // index of the background card (transparent pixels), after the top layer
+  const cards = layers + (background ? 1 : 0);
+  const canvases = useRef<(HTMLCanvasElement | null)[]>([]);
   // One frame of throttling, like the preview; one pipeline run (memoised) yields every layer.
   useEffect(() => {
-    if (!image) return
-    const id = requestAnimationFrame(() => layerImages(image.bitmap, params, freeze).forEach((data, k) => { const c = canvases.current[k]; if (c) drawMask(c, data) }))
-    return () => cancelAnimationFrame(id)
-  }, [image, params, freeze])
-  if (!image) return <p className="p-2 text-xs text-gray-500">No image</p>
-  const lock = (k: number, merge = false) => captureFreeze(image.bitmap, params, freeze, k, merge)
-  const btn = (on: boolean) => `rounded border p-1 disabled:opacity-30 ${on ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-400'}`
-  // Top layer first, down to layer 0 (the darkest; everything but void).
-  return Array.from({ length: layers }, (_, k) => {
-    const locked = freeze?.locked.includes(k) ?? false
-    const hidden = freeze?.hidden?.includes(k) ?? false
+    if (!image) return;
+    const id = requestAnimationFrame(() =>
+      canvases.current.forEach(
+        (c, k) =>
+          c &&
+          k < cards &&
+          drawMask(c, layerImage(image.bitmap, params, freeze, k)),
+      ),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [image, params, freeze, cards]);
+  if (!image) return <p className="p-2 text-xs text-gray-500">No image</p>;
+  const lock = (k: number, merge = false) =>
+    captureFreeze(image.bitmap, params, freeze, k, merge);
+  const btn = (on: boolean) =>
+    `rounded border p-1 disabled:opacity-30 ${on ? "border-blue-600 bg-blue-600 text-white" : "border-gray-400"}`;
+  const cap = maxLayers(params.layerHeightMm);
+  // Print layers of card k. `i` is the levelLayers slot the card shows (mirrored by Flip Depth); the background has its own height.
+  const n = (k: number) =>
+    k === background
+      ? Math.min(cap, params.backgroundLayers)
+      : levelLayersAt(params, k);
+  const setN = (k: number, v: number) => {
+    if (k === background) return setParam("backgroundLayers", v);
+    const i = params.flipDepth ? layers - 1 - k : k;
+    setParam(
+      "levelLayers",
+      Array.from({ length: layers }, (_, j) =>
+        j === i
+          ? v
+          : levelLayersAt(params, params.flipDepth ? layers - 1 - j : j),
+      ),
+    );
+  };
+  // Lowest print height first; ties keep the top layer before lower ones and the background before all.
+  const order = Array.from({ length: cards }, (_, k) => k)
+    .reverse()
+    .sort((a, b) => n(a) - n(b));
+  return order.map((k) => {
+    const locked = freeze?.locked.includes(k) ?? false;
+    const hidden = freeze?.hidden?.includes(k) ?? false;
     return (
       <div
         key={k}
         onClick={() => setEditLevel(editLevel === k ? null : k)}
-        title={editLevel === k ? 'Show full preview' : 'Edit this layer'}
-        className={`shrink-0 cursor-pointer rounded border-2 p-1 ${k === editLevel ? 'border-blue-600' : 'border-transparent'}`}
+        title={
+          editLevel === k
+            ? "Show full preview"
+            : k === background
+              ? "Show the background alone"
+              : "Edit this layer"
+        }
+        className={`shrink-0 cursor-pointer rounded border-2 p-1 ${k === editLevel ? "border-blue-600" : "border-transparent"}`}
       >
-        <canvas ref={(c) => { canvases.current[k] = c }} className="block h-auto w-full" />
-        <div className="flex justify-between pt-1">
+        <canvas
+          ref={(c) => {
+            canvases.current[k] = c;
+          }}
+          className="block h-auto w-full"
+        />
+        <div className="flex items-center justify-between pt-1 text-xs tabular-nums text-center">
           <button
-            aria-label={locked ? `Unlock layer ${k}` : `Lock layer ${k}`}
-            aria-pressed={locked}
-            onClick={(e) => { e.stopPropagation(); setFreeze(locked ? thaw(freeze!, k) : lock(k)) }}
-            className={btn(locked)}
+            aria-label={`Lower layer ${k}`}
+            disabled={n(k) <= 1}
+            onClick={(e) => {
+              e.stopPropagation();
+              setN(k, n(k) - 1);
+            }}
+            className={`${btn(false)} px-1.5 py-0`}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="4" y="11" width="16" height="10" rx="2" fill={locked ? 'currentColor' : 'none'} />
-              <path d={locked ? 'M8 11V7a4 4 0 0 1 8 0v4' : 'M8 11V7a4 4 0 0 1 7.5-2'} />
-            </svg>
+            −
           </button>
+          {k === background ? (
+            <>
+              Alpha
+              <br />
+            </>
+          ) : (
+            ""
+          )}
+          {(n(k) * params.layerHeightMm).toFixed(2)} mm
           <button
-            aria-label={hidden ? `Show layer ${k}` : `Hide layer ${k}`}
-            aria-pressed={!hidden}
-            disabled={!locked}
-            onClick={(e) => { e.stopPropagation(); setFreeze({ ...freeze!, hidden: hidden ? freeze!.hidden!.filter((l) => l !== k) : [...(freeze!.hidden ?? []), k] }) }}
-            className={btn(locked && !hidden)}
+            aria-label={`Raise layer ${k}`}
+            disabled={n(k) >= cap}
+            onClick={(e) => {
+              e.stopPropagation();
+              setN(k, n(k) + 1);
+            }}
+            className={`${btn(false)} px-1.5 py-0`}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z" />
-              <circle cx="12" cy="12" r="3" />
-              {hidden && <path d="M3 3l18 18" />}
-            </svg>
-          </button>
-          <button
-            aria-label={`Add the preview's pixels to locked layer ${k}`}
-            disabled={!locked}
-            onClick={(e) => { e.stopPropagation(); setFreeze(lock(k, true)) }}
-            className={btn(false)}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
+            +
           </button>
         </div>
+        {k !== background && (
+          <div className="flex justify-between pt-1">
+            <button
+              aria-label={locked ? `Unlock layer ${k}` : `Lock layer ${k}`}
+              aria-pressed={locked}
+              onClick={(e) => {
+                e.stopPropagation();
+                setFreeze(locked ? thaw(freeze!, k) : lock(k));
+              }}
+              className={btn(locked)}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect
+                  x="4"
+                  y="11"
+                  width="16"
+                  height="10"
+                  rx="2"
+                  fill={locked ? "currentColor" : "none"}
+                />
+                <path
+                  d={
+                    locked
+                      ? "M8 11V7a4 4 0 0 1 8 0v4"
+                      : "M8 11V7a4 4 0 0 1 7.5-2"
+                  }
+                />
+              </svg>
+            </button>
+            <button
+              aria-label={hidden ? `Show layer ${k}` : `Hide layer ${k}`}
+              aria-pressed={!hidden}
+              disabled={!locked}
+              onClick={(e) => {
+                e.stopPropagation();
+                setFreeze({
+                  ...freeze!,
+                  hidden: hidden
+                    ? freeze!.hidden!.filter((l) => l !== k)
+                    : [...(freeze!.hidden ?? []), k],
+                });
+              }}
+              className={btn(locked && !hidden)}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z" />
+                <circle cx="12" cy="12" r="3" />
+                {hidden && <path d="M3 3l18 18" />}
+              </svg>
+            </button>
+            <button
+              aria-label={`Add the preview's pixels to locked layer ${k}`}
+              disabled={!locked}
+              onClick={(e) => {
+                e.stopPropagation();
+                setFreeze(lock(k, true));
+              }}
+              className={btn(false)}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
-    )
-  }).reverse()
+    );
+  });
 }
 
 export function Sidebar() {
-  const images = useStore((s) => s.images)
-  const index = useStore((s) => s.index)
-  const select = useStore((s) => s.select)
-  const remove = useStore((s) => s.remove)
-  const clear = useStore((s) => s.clear)
-  const view = useStore((s) => s.tab)
-  const setView = useStore((s) => s.setTab)
+  const images = useStore((s) => s.images);
+  const index = useStore((s) => s.index);
+  const select = useStore((s) => s.select);
+  const remove = useStore((s) => s.remove);
+  const clear = useStore((s) => s.clear);
+  const view = useStore((s) => s.tab);
+  const setView = useStore((s) => s.setTab);
 
   return (
     <nav className="flex w-full flex-col gap-2 md:w-32">
       <div className="flex">
-        <button className={tab(view === 'images')} onClick={() => setView('images')}>Images</button>
-        <button className={tab(view === 'layers')} onClick={() => setView('layers')}>Layers</button>
+        <button
+          className={tab(view === "images")}
+          onClick={() => setView("images")}
+        >
+          Images
+        </button>
+        <button
+          className={tab(view === "layers")}
+          onClick={() => setView("layers")}
+        >
+          Layers
+        </button>
       </div>
       <div className="flex flex-row gap-2 overflow-auto md:flex-col">
-        {view === 'layers' ? (
+        {view === "layers" ? (
           <Layers />
         ) : (
           <>
@@ -125,22 +278,35 @@ export function Sidebar() {
               <div
                 key={img.id}
                 onClick={() => select(i)}
+                onDoubleClick={() => setView("layers")}
                 title={img.name}
-                className={`shrink-0 cursor-pointer rounded border-2 p-1 ${i === index ? 'border-blue-600' : 'border-transparent'}`}
+                className={`shrink-0 cursor-pointer rounded border-2 p-1 ${i === index ? "border-blue-600" : "border-transparent"}`}
               >
                 <div className="relative mx-auto w-fit">
                   <Thumb bitmap={img.bitmap} />
                   <button
                     aria-label={`Remove ${img.name}`}
-                    onClick={(e) => { e.stopPropagation(); remove(i) }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      remove(i);
+                    }}
                     className="absolute top-0.5 right-0.5 rounded bg-white/80 p-0.5 opacity-50 hover:opacity-100 dark:bg-black/60"
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
                       <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />
                     </svg>
                   </button>
                 </div>
-                <p className="truncate text-xs text-gray-500 dark:text-gray-400">{img.name}</p>
+                <p className="truncate text-xs text-gray-500 dark:text-gray-400">
+                  {img.name}
+                </p>
               </div>
             ))}
             <button
@@ -154,5 +320,5 @@ export function Sidebar() {
         )}
       </div>
     </nav>
-  )
+  );
 }

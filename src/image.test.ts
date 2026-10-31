@@ -80,15 +80,20 @@ test('tone: defaults are identity; each knob moves the right part of the range',
   expect(tone(0, { ...d, highlights: -100 })).toBeCloseTo(0) // highlights leave black alone
 })
 
-test('frameField base: fixed depth and void for masked pixels', () => {
-  const p = { frame: 'none' as const, thresholds: [50], layerHeightMm: 0.2, widthMm: 10, heightMm: null }
-  const mask = Uint8Array.of(1, 0)
-  const fixed = frameField(Float32Array.of(0.1, 0.1), 2, 1, p, { mask, level: 4 }) // 1 mm at 0.2 mm layers
-  expect(fixed.heights[0]).toBe(4)
-  expect(fixed.heights[1]).toBeLessThan(1)
-  expect(fixed.maxHeightMm).toBeCloseTo(0.8) // thresholds grew to cover the base level (top = base layer + 4 more)
-  const none = frameField(Float32Array.of(0.1, 0.1), 2, 1, p, { mask, level: -1 })
-  expect(none.heights[0]).toBe(-1)
+test('frameField levelLayers: each level prints at its own rung, capped at 1 mm; flipDepth mirrors the ladder', () => {
+  const p = { frame: 'none' as const, thresholds: [50], layerHeightMm: 0.2, widthMm: 10, heightMm: null, levelLayers: [1, 4] }
+  const { heights, thresholds, maxHeightMm, baseMm } = frameField(Float32Array.of(0.1, 0.9), 2, 1, p)
+  expect(levelOf(heights[0], thresholds)).toBe(0)
+  expect(levelOf(heights[1], thresholds)).toBe(3) // 4 layers = 0.8 mm = rung 3
+  expect(baseMm + maxHeightMm).toBeCloseTo(0.8)
+  const capped = frameField(Float32Array.of(0.9), 1, 1, { ...p, levelLayers: [1, 9] })
+  expect(capped.baseMm + capped.maxHeightMm).toBeCloseTo(1) // capped at 1 mm
+  const flipped = frameField(Float32Array.of(0.1, 0.9), 2, 1, { ...p, flipDepth: true })
+  expect(levelOf(flipped.heights[0], flipped.thresholds)).toBe(3)
+  expect(levelOf(flipped.heights[1], flipped.thresholds)).toBe(0)
+  const bg = frameField(Float32Array.of(0.1, 0.9), 2, 1, { ...p, backgroundLayers: 5 }, Uint8Array.of(1, 0)) // transparent pixel at its own height, unflipped
+  expect(levelOf(bg.heights[0], bg.thresholds)).toBe(4)
+  expect(bg.baseMm + bg.maxHeightMm).toBeCloseTo(1)
 })
 
 test('flipDepth mirrors image levels but not the frame', () => {
@@ -98,12 +103,6 @@ test('flipDepth mirrors image levels but not the frame', () => {
   expect(levelOf(heights[12], thresholds)).toBe(1) // dark -> top image level
   expect(levelOf(heights[6], thresholds)).toBe(0) // light interior -> bottom
   expect(levelOf(heights[0], thresholds)).toBe(1) // 1 mm frame at 0.5 mm layers is level 1 either way
-  // the base is on the image's level scale, so a level-0 (black) base flips to the top like black pixels
-  const mask = Uint8Array.from({ length: 25 }, (_, i) => (i === 7 ? 1 : 0))
-  const b = frameField(f, 5, 5, { ...p, frame: 'none' }, { mask, level: 0 })
-  expect(levelOf(b.heights[7], b.thresholds)).toBe(1)
-  expect(levelOf(b.heights[7], b.thresholds)).toBe(levelOf(b.heights[12], b.thresholds))
-  expect(frameField(f, 5, 5, { ...p, frame: 'none' }, { mask, level: -1 }).heights[7]).toBe(-1) // void stays void
 })
 
 test('brushFreeze: erase clears only this layer under the brush, add sets it; thaw drops the layer', () => {

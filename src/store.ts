@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { temporal } from 'zundo'
 import { allImages, deleteImage, patchImage, putImage } from './db'
-import { type Freeze, hasAlpha } from './image'
+import { type Freeze, hasAlpha, maxLayers } from './image'
 
 export type Params = {
   contrast: number; saturation: number // -100..100, applied as canvas filters before the gray conversion
@@ -15,10 +15,10 @@ export type Params = {
   hysteresis: number // dead band around each threshold, percent of intensity; 0 = off
   levelMin: number; levelMax: number // percent; intensity is rescaled into this range
   minFeatureMm: number // islands/holes narrower than this are removed from every layer; 0 = off
-  background: number // percent gray that transparent pixels become; independent of invert and levels
-  baseMm: number | 'none' // print depth of transparent pixels in mm (snapped to a level), or 'none' = cut out; default one layer
+  backgroundLayers: number // print layers of transparent pixels (the background layer), at most 1 mm
   thresholds: number[] // percent, ascending, length layers-1
-  layerHeightMm: number // printer layer height; one layer per colour level, the darkest being the base
+  levelLayers: number[] // print layers per colour level, length layers; level k prints at levelLayers[k] layer heights, at most 1 mm
+  layerHeightMm: number // printer layer height
   nozzleMm: number // nozzle width; grid pitch is half of it
   flipDepth: boolean // STL only: black prints highest and white lowest; preview, PNG and boundaries are unchanged
   frame: 'none' | 'flat' | 'tapered' | 'mixed' // 1 mm border; flat = 1 mm high, tapered = 1 mm down to one layer at the edge, mixed = flat sides, tapered top/bottom
@@ -26,7 +26,8 @@ export type Params = {
 export type Img = { id: number; bitmap: ImageBitmap; name: string; hasAlpha: boolean; freeze: Freeze | null }
 
 const respace = (layers: number) => Array.from({ length: layers - 1 }, (_, k) => Math.round(((k + 1) * 100) / layers))
-export const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, background: 0, baseMm: 0.15, thresholds: respace(4), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: true, frame: 'mixed' }
+const ladder = (layers: number, lh: number) => Array.from({ length: layers }, (_, k) => Math.min(k + 1, maxLayers(lh))) // one more print layer per level, capped at 1 mm
+export const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, backgroundLayers: 1, thresholds: respace(4), levelLayers: ladder(4, 0.15), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: true, frame: 'mixed' }
 const PARAM_KEYS = Object.keys(DEFAULTS) as (keyof Params)[]
 export const pickParams = (s: Params): Params => Object.fromEntries(PARAM_KEYS.map((k) => [k, s[k]])) as Params
 const FRAMES = ['none', 'flat', 'tapered', 'mixed']
@@ -36,9 +37,8 @@ export const isParams = (x: unknown): x is Params => {
   const o = x as Record<string, unknown>
   return PARAM_KEYS.every((k) =>
     k === 'heightMm' ? o[k] === null || typeof o[k] === 'number'
-    : k === 'thresholds' ? Array.isArray(o[k]) && (o[k] as unknown[]).every((t) => typeof t === 'number')
+    : k === 'thresholds' || k === 'levelLayers' ? Array.isArray(o[k]) && (o[k] as unknown[]).every((t) => typeof t === 'number')
     : k === 'frame' ? FRAMES.includes(o[k] as string)
-    : k === 'baseMm' ? typeof o[k] === 'number' || o[k] === 'none'
     : typeof o[k] === typeof DEFAULTS[k])
 }
 
@@ -159,16 +159,16 @@ export const useStore = create<State>()(
         clear: () => set((s) => swap(s, -1)),
         reset: () => set(DEFAULTS),
         setParams: (p) => set(pickParams(p)),
-        setLayers: (n) => { set({ thresholds: respace(n) }); get().setFreeze(null) }, // level indices change meaning, so a freeze can't carry over
+        setLayers: (n) => { set({ thresholds: respace(n), levelLayers: ladder(n, get().layerHeightMm) }); get().setFreeze(null) }, // level indices change meaning, so a freeze can't carry over
         setParam: (key, value) => set({ [key]: value }),
       }),
       {
         name: 'shademaker',
-        version: 1,
+        version: 3,
         migrate: (persisted) => {
-          // v0 allowed baseMm: 'level'; it now defaults to one layer
+          // v2 dropped the fixed base depth (baseMm) for per-level print heights; v3 dropped the background gray for a background height
           const s = persisted as State
-          const fix = (p: Params) => ((p.baseMm as unknown) === 'level' ? { ...p, baseMm: p.layerHeightMm } : p)
+          const fix = (p: Params) => { const { baseMm: _b, background: _g, ...rest } = p as Params & { baseMm?: unknown; background?: unknown }; return { ...rest, levelLayers: rest.levelLayers ?? ladder(rest.thresholds.length + 1, rest.layerHeightMm), backgroundLayers: rest.backgroundLayers ?? 1 } }
           return { ...fix(s), configs: Object.fromEntries(Object.entries(s.configs ?? {}).map(([k, v]) => [k, fix(v)])) }
         },
         partialize: ({ images: _i, editLevel: _e, strokes: _s, ...rest }) => rest, // params + index + configs + autogen + tab; images (and their freeze) live in IndexedDB
@@ -185,6 +185,18 @@ useStore.subscribe((s, prev) => {
 })
 
 export const selectImage = (s: State): Img | undefined => s.images[s.index]
-/** The layer being edited (locked or not), or null if none or it no longer exists. */
+/** Index of the background layer (the image's transparent pixels) in the layer list, or null without alpha. */
+export const selectBackground = (s: State): number | null => (s.images[s.index]?.hasAlpha ? s.thresholds.length + 1 : null)
+/** The layer being edited (locked or not, or the background), or null if none or it no longer exists. */
 export const selectEditLevel = (s: State): number | null =>
-  s.editLevel !== null && s.editLevel <= s.thresholds.length ? s.editLevel : null
+  s.editLevel !== null && s.editLevel <= s.thresholds.length + (selectBackground(s) ? 1 : 0) ? s.editLevel : null
+/** The layer the brush paints on: an image layer being edited; the background has no mask to paint. */
+export const selectBrushLevel = (s: State): number | null => {
+  const k = selectEditLevel(s)
+  return k !== null && k <= s.thresholds.length ? k : null
+}
+/** Print layers of image level k, clamped to 1 mm; flipDepth mirrors the ladder, as the STL does. */
+export const levelLayersAt = (p: Params, k: number) => {
+  const i = p.flipDepth ? p.thresholds.length - k : k
+  return Math.min(maxLayers(p.layerHeightMm), p.levelLayers[i] ?? i + 1)
+}

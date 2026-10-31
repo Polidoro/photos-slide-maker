@@ -140,7 +140,8 @@ export function Controls() {
   const stem = img.name.replace(/\.[^.]+$/, "");
 
   async function downloadPng() {
-    const data = quantizedImage(bitmap!, pickParams(useStore.getState()), freeze);
+    const st = useStore.getState();
+    const data = quantizedImage(bitmap!, pickParams(st), freeze, st.flipDepth);
     const c = new OffscreenCanvas(data.width, data.height);
     c.getContext("2d")!.putImageData(data, 0, 0);
     downloadBlob(await c.convertToBlob({ type: "image/png" }), stem + ".png");

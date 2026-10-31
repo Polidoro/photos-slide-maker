@@ -4,6 +4,8 @@ import type { Params } from './store'
 export const gridSize = (widthMm: number, nozzleMm: number) => Math.min(1024, Math.max(64, Math.round(widthMm / (nozzleMm / 2))))
 const MAX_BLUR = 0.05 // fraction of the long edge at 100% smoothing
 const ALPHA_CUTOFF = 128 // below this a pixel is "transparent"
+/** Print layers that fit in 1 mm: the cap on any level's height. */
+export const maxLayers = (layerHeightMm: number) => Math.floor(1 / layerHeightMm + 1e-9)
 
 /** Scale an image to fit `longEdge` pixels on its longer side. */
 export function fit(image: { width: number; height: number }, longEdge: number, min = 2) {
@@ -97,11 +99,10 @@ export function applyFreeze(heights: Float32Array, w: number, h: number, thresho
 
 /** Lock layer k: capture its mask from the current output (locks applied) into the freeze; `merge` adds to the existing mask instead of replacing it. */
 export function captureFreeze(image: ImageBitmap, params: PipelineParams, current: Freeze | null, k: number, merge = false): Freeze {
-  const { heights, w, h, opts, transparent } = sampleHeights(image, params, current)
-  const top = params.thresholds.length
+  const { levels, w, h, transparent } = samplePipeline(image, params, current)
   const f = current ? resample(current, w, h) : { locked: [], w, h, bits: new Uint16Array(w * h) }
   const bits = f.bits.slice()
-  for (let i = 0; i < bits.length; i++) bits[i] = !transparent[i] && Math.min(top, levelOf(heights[i], opts.thresholds)) >= k ? bits[i] | (1 << k) : merge ? bits[i] : bits[i] & ~(1 << k)
+  for (let i = 0; i < bits.length; i++) bits[i] = !transparent[i] && levels[i] >= k ? bits[i] | (1 << k) : merge ? bits[i] : bits[i] & ~(1 << k)
   return { ...f, bits, locked: [...f.locked.filter((l) => l !== k), k].sort((a, b) => a - b) }
 }
 
@@ -111,24 +112,21 @@ export function thaw(f: Freeze, k: number): Freeze | null {
   return locked.length ? { ...f, locked, hidden: f.hidden?.filter((l) => l !== k) } : null
 }
 
-/** Layer k as pixels, white where present, transparent elsewhere (the image's transparent pixels are never part of a layer): from the freeze if locked, else from the output. */
+/** Layer k as pixels, white where present, transparent elsewhere: from the freeze if locked, else from the output. Layer top+1 is the background: the image's transparent pixels, which belong to no other layer. */
 export function layerImage(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null, k: number): ImageData {
-  const { heights, w, h, opts, transparent } = sampleHeights(image, params, freeze)
+  const { levels, w, h, transparent } = samplePipeline(image, params, freeze)
   if (freeze?.locked.includes(k)) return freezeLayerImage(resample(freeze, w, h), k)
   const top = params.thresholds.length
   const px = new Uint8ClampedArray(w * h * 4)
-  for (let i = 0; i < heights.length; i++) if (!transparent[i] && Math.min(top, levelOf(heights[i], opts.thresholds)) >= k) px.set([255, 255, 255, 255], 4 * i)
+  for (let i = 0; i < levels.length; i++) if (k > top ? transparent[i] : !transparent[i] && levels[i] >= k) px.set([255, 255, 255, 255], 4 * i)
   return new ImageData(px, w, h)
 }
-/** Every layer 0..top (one memoised pipeline run). */
-export const layerImages = (image: ImageBitmap, params: PipelineParams, freeze: Freeze | null) =>
-  Array.from({ length: params.thresholds.length + 1 }, (_, k) => layerImage(image, params, freeze, k))
 
-/** Level at grid pixel (x, y) of the output, clamped to the image's top level; -1 where the image is transparent. */
+/** Layer at grid pixel (x, y) of the output: the level clamped to the image's top level, or top+1 (the background) where the image is transparent. */
 export function levelAt(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null, x: number, y: number): number {
-  const { heights, w, opts, transparent } = sampleHeights(image, params, freeze)
+  const { levels, w, transparent } = samplePipeline(image, params, freeze)
   const i = Math.floor(y) * w + Math.floor(x)
-  return transparent[i] ? -1 : Math.min(params.thresholds.length, levelOf(heights[i], opts.thresholds))
+  return transparent[i] ? params.thresholds.length + 1 : levels[i]
 }
 
 /** One locked layer as pixels: white where present, transparent elsewhere. */
@@ -150,14 +148,19 @@ export function brushFreeze(f: Freeze, k: number, cx: number, cy: number, r: num
   return { ...f, bits }
 }
 
-/** The quantized grayscale as pixels: what the preview shows and the PNG export saves. Frame levels above the image's top print white. */
-export function quantizedImage(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null = null): ImageData {
-  const { heights, w, h, opts } = sampleHeights(image, params, freeze)
+/**
+ * The printed heights as gray pixels: what the preview shows and the PNG export saves. One print layer per level of the default
+ * ladder spans black to white, so anything taller (raised levels, background) clips to white. The frame is left out. With flipDepth the tone
+ * is inverted, as black then prints highest.
+ */
+export function quantizedImage(image: ImageBitmap, params: PipelineParams, freeze: Freeze | null = null, flipDepth = false): ImageData {
+  const { heights, w, h, opts } = sampleHeights(image, { ...params, frame: 'none' }, freeze, flipDepth) // the frame is STL only
   const steps = params.thresholds.length
   const px = new Uint8ClampedArray(w * h * 4)
   for (let i = 0; i < heights.length; i++) {
     if (heights[i] < 0) continue // void: transparent
-    const v = Math.round((levelOf(heights[i], opts.thresholds) / steps) * 255)
+    const t = levelOf(heights[i], opts.thresholds) / steps
+    const v = Math.round((flipDepth ? 1 - t : t) * 255)
     px[4 * i] = px[4 * i + 1] = px[4 * i + 2] = v
     px[4 * i + 3] = 255
   }
@@ -186,18 +189,19 @@ const levelToField = (thresholds: number[]) => piecewise([0, ...thresholds.map((
 
 /**
  * Convert the 0..1 field to layer-index units and add the frame. Level j prints at z = (j+1)·layerHeight;
- * image level k is j = k (the darkest level is the single base layer), the 1 mm frame is j = round(1/lh)-1, and a taper
- * runs linearly from that at the inner edge down to j = 0 (one layer) at the outer edge. Returns the mesher
- * options: thresholds at half-integers, one level per print layer.
+ * image level k is j = levelLayers[k]-1 (default k, one more print layer per level; capped at 1 mm), the 1 mm frame is
+ * j = round(1/lh)-1, and a taper runs linearly from that at the inner edge down to j = 0 (one layer) at the outer edge.
+ * Returns the mesher options: thresholds at half-integers, one level per print layer.
  */
-export function frameField(src: Float32Array, w: number, h: number, p: Pick<PipelineParams, 'frame' | 'thresholds' | 'layerHeightMm' | 'widthMm' | 'heightMm'> & { flipDepth?: boolean }, base?: { mask: Uint8Array; level: number }) {
-  const T = thresholdsOf(p.thresholds), L = T.length + 1
-  let heights = src.map(piecewise([0, ...T, 1], [0, ...T.map((_, i) => i + 0.5), L - 1]))
-  if (p.flipDepth) heights = heights.map((v) => L - 1 - v) // image levels only; the frame is applied after
-  // Transparent pixels at a level (or -1 = void, left out of the mesh). The base is a level on the image's scale, so it
-  // flips with the image: a black base prints at the same height as the black level. The frame still wins at the edges.
-  const baseLevel = base && p.flipDepth && base.level >= 0 && base.level < L ? L - 1 - base.level : base?.level
-  if (base) for (let i = 0; i < heights.length; i++) if (base.mask[i]) heights[i] = baseLevel!
+export function frameField(src: Float32Array, w: number, h: number, p: Pick<PipelineParams, 'frame' | 'thresholds' | 'layerHeightMm' | 'widthMm' | 'heightMm'> & { levelLayers?: number[]; backgroundLayers?: number; flipDepth?: boolean }, transparent?: Uint8Array) {
+  const T = thresholdsOf(p.thresholds), L = T.length + 1, cap = maxLayers(p.layerHeightMm)
+  const js = Array.from({ length: L }, (_, k) => Math.min(cap, p.levelLayers?.[k] ?? k + 1) - 1)
+  if (p.flipDepth) js.reverse() // image levels only; the background and frame are applied after
+  // Each threshold lands midway between its two levels' j, so adjacent levels one rung apart cut at exactly j+0.5 as before.
+  // ponytail: levels more than a rung apart ramp through every rung in between over one grid cell instead of a vertical wall
+  const heights = src.map(piecewise([0, ...T, 1], [js[0], ...js.slice(1).map((j, k) => (js[k] + j) / 2), js[L - 1]]))
+  const bg = Math.min(cap, p.backgroundLayers ?? 1) - 1 // transparent pixels print at their own height; the frame still wins at the edges
+  if (transparent) for (let i = 0; i < heights.length; i++) if (transparent[i]) heights[i] = bg
   const top = Math.round(1 / p.layerHeightMm) - 1
   const heightMm = p.heightMm ?? (p.widthMm * (h - 1)) / (w - 1)
   const mmx = p.widthMm / (w - 1), mmy = heightMm / (h - 1) // grid pitch in mm per axis
@@ -213,7 +217,7 @@ export function frameField(src: Float32Array, w: number, h: number, p: Pick<Pipe
         else if (dx < 1) u = top
         if (u !== null) heights[y * w + x] = u
       }
-  const n = Math.max(L - 1, p.frame === 'none' ? 0 : top, baseLevel ?? 0) + 1
+  const n = Math.max(...js, transparent ? bg : 0, p.frame === 'none' ? 0 : top) + 1
   const thresholds = Array.from({ length: n - 1 }, (_, j) => j + 0.5)
   return { heights, thresholds, baseMm: p.layerHeightMm, maxHeightMm: (n - 1) * p.layerHeightMm, widthMm: p.widthMm, heightMm }
 }
@@ -325,7 +329,7 @@ export function medianField(src: Float32Array, w: number, h: number, radius: num
   return out
 }
 
-export type PipelineParams = Pick<Params, 'contrast' | 'saturation' | 'lightness' | 'gamma' | 'shadows' | 'highlights' | 'median' | 'bilateral' | 'edgeTolerance' | 'smoothing' | 'hysteresis' | 'invert' | 'levelMin' | 'levelMax' | 'minFeatureMm' | 'background' | 'baseMm' | 'widthMm' | 'heightMm' | 'nozzleMm' | 'thresholds' | 'frame' | 'layerHeightMm'>
+export type PipelineParams = Pick<Params, 'contrast' | 'saturation' | 'lightness' | 'gamma' | 'shadows' | 'highlights' | 'median' | 'bilateral' | 'edgeTolerance' | 'smoothing' | 'hysteresis' | 'invert' | 'levelMin' | 'levelMax' | 'minFeatureMm' | 'backgroundLayers' | 'widthMm' | 'heightMm' | 'nozzleMm' | 'thresholds' | 'levelLayers' | 'frame' | 'layerHeightMm'>
 
 /** Tone curve on a 0..1 gray: lightness shifts, gamma bends midtones (>1 brightens), shadows/highlights lift or crush each end. */
 export function tone(l: number, p: Pick<PipelineParams, 'lightness' | 'gamma' | 'shadows' | 'highlights'>) {
@@ -335,7 +339,7 @@ export function tone(l: number, p: Pick<PipelineParams, 'lightness' | 'gamma' | 
   return Math.min(1, Math.max(0, l))
 }
 
-function computeHeights(image: ImageBitmap, p: PipelineParams, freeze: Freeze | null, flipDepth: boolean) {
+function pipeline(image: ImageBitmap, p: PipelineParams, freeze: Freeze | null) {
   const { w, h } = fit(image, gridSize(p.widthMm, p.nozzleMm))
   const ctx = new OffscreenCanvas(w, h).getContext('2d')!
   // Native filters: saturate() reweights the channels feeding the gray conversion, so it still matters for a grayscale result.
@@ -370,25 +374,25 @@ function computeHeights(image: ImageBitmap, p: PipelineParams, freeze: Freeze | 
   // 4. Layer-mask blur smooths each layer's outline (blur mask, cut at 0.5) so no intermediate layers appear at edges.
   if (sr > 0) heights = viaMasks(heights, thresholds, (mask) => blurField(Float32Array.from(mask), w, h, sr))
 
-  // Transparent pixels become the background gray, bypassing invert, levels and smoothing.
-  for (let i = 0; i < heights.length; i++) if (transparent[i]) heights[i] = p.background / 100
-
   // 4b. Locked layers override whatever the live pipeline produced for them.
   heights = applyFreeze(heights, w, h, thresholds, freeze)
-
-  // 5. Frame and convert to layer units (the mesher's field). A fixed base depth overrides the gray for transparent pixels.
-  const base = { mask: transparent, level: p.baseMm === 'none' ? -1 : Math.max(0, Math.round(p.baseMm / p.layerHeightMm) - 1) }
-  const { heights: framed, ...opts } = frameField(heights, w, h, { ...p, flipDepth }, base)
-  return { heights: framed, w, h, opts, transparent }
+  const levels = Uint8Array.from(heights, (v) => levelOf(v, thresholds)) // colour level per pixel, 0..top
+  return { field: heights, levels, w, h, transparent }
 }
 
-// Single-entry memo: the preview and the STL build ask for the same result back to back.
-// `flipDepth` is passed only by the STL build, so the preview, PNG and freeze captures keep black = lowest.
-let last: { image: ImageBitmap; key: string; freeze: Freeze | null; result: ReturnType<typeof computeHeights> } | null = null
-export function sampleHeights(image: ImageBitmap, p: PipelineParams, freeze: Freeze | null = null, flipDepth = false) {
-  const key = JSON.stringify(p) + flipDepth
+// Single-entry memo of the slow part (filters, masks, locks): the preview, layer cards and STL build all ask for it back to back.
+let last: { image: ImageBitmap; key: string; freeze: Freeze | null; result: ReturnType<typeof pipeline> } | null = null
+export function samplePipeline(image: ImageBitmap, p: PipelineParams, freeze: Freeze | null = null) {
+  const key = JSON.stringify(p)
   if (last && last.image === image && last.key === key && last.freeze === freeze) return last.result
-  const result = computeHeights(image, p, freeze, flipDepth)
+  const result = pipeline(image, p, freeze)
   last = { image, key, freeze, result }
   return result
+}
+
+/** The mesher's field: the pipeline output framed and converted to print-layer units (cheap, so not memoised). Transparent pixels take the background height. */
+export function sampleHeights(image: ImageBitmap, p: PipelineParams, freeze: Freeze | null = null, flipDepth = false) {
+  const { field, w, h, transparent } = samplePipeline(image, p, freeze)
+  const { heights, ...opts } = frameField(field, w, h, { ...p, flipDepth }, transparent)
+  return { heights, w, h, opts, transparent }
 }

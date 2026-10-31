@@ -4,7 +4,7 @@ import { IconButton, Levels } from "./Levels";
 import type { BrushMode } from "./image";
 import { Preview } from "./Preview";
 import { Sidebar } from "./Sidebar";
-import { selectEditLevel, selectImage, useStore } from "./store";
+import { selectBrushLevel, selectImage, useStore } from "./store";
 
 export default function App() {
   const image = useStore(selectImage);
@@ -15,7 +15,7 @@ export default function App() {
   const [opacity, setOpacity] = useState(0);
   const [brush, setBrush] = useState(4); // brush radius in freeze cells
   const [mode, setMode] = useState<BrushMode>("erase");
-  const editing = useStore(selectEditLevel) !== null;
+  const editing = useStore(selectBrushLevel) !== null;
   useEffect(() => {
     hydrate();
   }, [hydrate]);
@@ -30,7 +30,7 @@ export default function App() {
       // While a layer is being edited, undo/redo apply to eraser strokes instead of params.
       const st = useStore.getState();
       const { undo, redo } =
-        selectEditLevel(st) !== null
+        selectBrushLevel(st) !== null
           ? { undo: st.undoStroke, redo: st.redoStroke }
           : useStore.temporal.getState();
       if (e.key === "z" && e.shiftKey) {
@@ -94,17 +94,25 @@ export default function App() {
               </span>
               {editing ? (
                 <label className="flex shrink-0 items-center gap-2">
-                  <IconButton label="Erase pixels" active={mode === "erase"} onClick={() => setMode("erase")}>
+                  <IconButton
+                    label="Erase pixels"
+                    active={mode === "erase"}
+                    onClick={() => setMode("erase")}
+                  >
                     <path d="M20 20H8L3 15a2 2 0 0 1 0-3l9-9a2 2 0 0 1 3 0l5 5a2 2 0 0 1 0 3l-7 7" />
                     <path d="M7 11l6 6" />
                   </IconButton>
-                  <IconButton label="Add pixels" active={mode === "add"} onClick={() => setMode("add")}>
+                  <IconButton
+                    label="Add pixels"
+                    active={mode === "add"}
+                    onClick={() => setMode("add")}
+                  >
                     <path d="M12 5v14M5 12h14" />
                   </IconButton>
                   <input
                     type="range"
                     min={1}
-                    max={10}
+                    max={36}
                     step={1}
                     value={brush}
                     onChange={(e) => setBrush(e.target.valueAsNumber)}
@@ -130,7 +138,12 @@ export default function App() {
                 {image.bitmap.width}×{image.bitmap.height} px
               </span>
             </div>
-            <Preview opacity={opacity} brush={brush} mode={mode} onBrush={setBrush} />
+            <Preview
+              opacity={opacity}
+              brush={brush}
+              mode={mode}
+              onBrush={setBrush}
+            />
             <Levels />
           </>
         ) : (

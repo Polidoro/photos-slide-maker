@@ -1,6 +1,6 @@
 import type React from "react";
 import { Range } from "react-range";
-import { selectImage, useStore } from "./store";
+import { useStore } from "./store";
 
 function Slider({
   label,
@@ -8,7 +8,6 @@ function Slider({
   background,
   onChange,
   right,
-  sections,
   readout,
 }: {
   label: string;
@@ -17,9 +16,7 @@ function Slider({
   onChange: (v: number[]) => void;
   right?: React.ReactNode;
   readout?: string; // replaces the default "values%" text after the label
-  sections?: React.ReactNode[]; // one caption per gap between the track edges and the handles
 }) {
-  const edges = [0, ...values, 100];
   const setDragging = useStore((s) => s.setDragging);
   return (
     <div className="flex w-full flex-col gap-1 text-sm">
@@ -67,22 +64,6 @@ function Slider({
           }}
         />
       </div>
-      {sections && (
-        <div className="relative h-4 w-full text-xs text-gray-500 dark:text-gray-400">
-          {sections.map((t, k) => (
-            <span
-              key={k}
-              className="absolute inset-y-0 flex items-center justify-center gap-1 overflow-hidden whitespace-nowrap"
-              style={{
-                left: `${edges[k]}%`,
-                width: `${edges[k + 1] - edges[k]}%`,
-              }}
-            >
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -131,18 +112,10 @@ export function Levels() {
   const levelMin = useStore((s) => s.levelMin);
   const levelMax = useStore((s) => s.levelMax);
   const thresholds = useStore((s) => s.thresholds);
-  const background = useStore((s) => s.background);
-  const baseMm = useStore((s) => s.baseMm);
-  const layerHeightMm = useStore((s) => s.layerHeightMm);
-  const flipDepth = useStore((s) => s.flipDepth);
   const invert = useStore((s) => s.invert);
-  const image = useStore(selectImage);
-  const hasAlpha = image?.hasAlpha ?? false;
   const setParam = useStore((s) => s.setParam);
   const setLayers = useStore((s) => s.setLayers);
   const layers = thresholds.length + 1;
-  const depth = (k: number) => ((k + 1) * layerHeightMm).toFixed(2); // unflipped depth of level k, as the select's option value
-  const baseLevel = baseMm === "none" ? 0 : Math.min(layers - 1, Math.max(0, Math.round(baseMm / layerHeightMm) - 1));
   const iconBtn =
     "h-6 w-6 rounded border border-gray-400 leading-none disabled:opacity-40";
 
@@ -179,7 +152,6 @@ export function Levels() {
         values={thresholds}
         background={`linear-gradient(to right, ${stops.join(", ")})`}
         onChange={(v) => setParam("thresholds", v)}
-        sections={edges.slice(0, -1).map((_, k) => `${((flipDepth ? layers - k : k + 1) * layerHeightMm).toFixed(2)} mm`)}
         right={
           <span className="flex items-center gap-1">
             {layers} layers
@@ -202,39 +174,6 @@ export function Levels() {
           </span>
         }
       />
-      {hasAlpha && (
-        <Slider
-          label="Background"
-          readout={
-            baseMm === "none"
-              ? "None"
-              : `${((flipDepth ? layers - baseLevel : baseLevel + 1) * layerHeightMm).toFixed(2)} mm`
-          }
-          values={[background]}
-          background={`linear-gradient(to right, ${stops.join(", ")})`}
-          onChange={([v]) => setParam("background", v)}
-          right={
-            <label className="flex items-center gap-2">
-              Base
-              <select
-              value={baseMm === "none" ? "none" : depth(baseLevel)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setParam("baseMm", v === "none" ? v : Number(v));
-              }}
-              className="rounded border border-gray-300 bg-white px-2 py-0.5 dark:border-gray-600 dark:bg-gray-800"
-            >
-              <option value="none">None</option>
-              {edges.slice(0, -1).map((_, k) => (
-                <option key={k} value={depth(k)}>
-                  {((flipDepth ? layers - k : k + 1) * layerHeightMm).toFixed(2)} mm
-                </option>
-              ))}
-            </select>
-            </label>
-          }
-        />
-      )}
     </>
   );
 }
