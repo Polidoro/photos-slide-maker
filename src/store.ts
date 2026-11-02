@@ -27,7 +27,8 @@ export type Img = { id: number; bitmap: ImageBitmap; name: string; hasAlpha: boo
 
 const respace = (layers: number) => Array.from({ length: layers - 1 }, (_, k) => Math.round(((k + 1) * 100) / layers))
 const ladder = (layers: number, lh: number) => Array.from({ length: layers }, (_, k) => Math.min(k + 1, maxLayers(lh))) // one more print layer per level, capped at 1 mm
-export const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, backgroundLayers: 1, thresholds: respace(4), levelLayers: ladder(4, 0.15), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: true, frame: 'mixed' }
+const above = (layers: number, lh: number) => Math.min(layers + 1, maxLayers(lh)) // background: one print layer above the ladder's top
+export const DEFAULTS: Params = { contrast: 0, saturation: 0, lightness: 0, gamma: 1, shadows: 0, highlights: 0, median: 0, bilateral: 0, edgeTolerance: 10, smoothing: 0, hysteresis: 0, widthMm: 164, heightMm: 128, invert: false, levelMin: 0, levelMax: 100, minFeatureMm: 0, backgroundLayers: above(4, 0.15), thresholds: respace(4), levelLayers: ladder(4, 0.15), layerHeightMm: 0.15, nozzleMm: 0.4, flipDepth: true, frame: 'mixed' }
 const PARAM_KEYS = Object.keys(DEFAULTS) as (keyof Params)[]
 export const pickParams = (s: Params): Params => Object.fromEntries(PARAM_KEYS.map((k) => [k, s[k]])) as Params
 const FRAMES = ['none', 'flat', 'tapered', 'mixed']
@@ -42,6 +43,8 @@ export const isParams = (x: unknown): x is Params => {
     : typeof o[k] === typeof DEFAULTS[k])
 }
 
+export type Format = 'stl' | '3mf'
+
 type State = Params & {
   images: Img[]
   index: number
@@ -52,6 +55,8 @@ type State = Params & {
   editLevel: number | null // locked layer shown alone in the preview for editing; UI only
   setEditLevel: (k: number | null) => void
   setAutogen: (b: boolean) => void
+  format: Format // export file format; persisted, not part of the undo history
+  setFormat: (f: Format) => void
   setFreeze: (f: Freeze | null) => void // on the current image; also written to IndexedDB. Clears stroke history.
   strokes: { past: Freeze[]; future: Freeze[] } // undo/redo for eraser strokes on the current image; UI only
   commitStroke: (f: Freeze) => void // setFreeze that records the previous freeze for undo
@@ -96,6 +101,8 @@ export const useStore = create<State>()(
         editLevel: null,
         setEditLevel: (editLevel) => set({ editLevel }),
         setAutogen: (autogen) => set({ autogen }),
+        format: 'stl',
+        setFormat: (format) => set({ format }),
         setFreeze: (freeze) => {
           const img = get().images[get().index]
           if (!img) return
@@ -159,7 +166,7 @@ export const useStore = create<State>()(
         clear: () => set((s) => swap(s, -1)),
         reset: () => set(DEFAULTS),
         setParams: (p) => set(pickParams(p)),
-        setLayers: (n) => { set({ thresholds: respace(n), levelLayers: ladder(n, get().layerHeightMm) }); get().setFreeze(null) }, // level indices change meaning, so a freeze can't carry over
+        setLayers: (n) => { set({ thresholds: respace(n), levelLayers: ladder(n, get().layerHeightMm), backgroundLayers: above(n, get().layerHeightMm) }); get().setFreeze(null) }, // level indices change meaning, so a freeze can't carry over
         setParam: (key, value) => set({ [key]: value }),
       }),
       {
@@ -168,7 +175,7 @@ export const useStore = create<State>()(
         migrate: (persisted) => {
           // v2 dropped the fixed base depth (baseMm) for per-level print heights; v3 dropped the background gray for a background height
           const s = persisted as State
-          const fix = (p: Params) => { const { baseMm: _b, background: _g, ...rest } = p as Params & { baseMm?: unknown; background?: unknown }; return { ...rest, levelLayers: rest.levelLayers ?? ladder(rest.thresholds.length + 1, rest.layerHeightMm), backgroundLayers: rest.backgroundLayers ?? 1 } }
+          const fix = (p: Params) => { const { baseMm: _b, background: _g, ...rest } = p as Params & { baseMm?: unknown; background?: unknown }; return { ...rest, levelLayers: rest.levelLayers ?? ladder(rest.thresholds.length + 1, rest.layerHeightMm), backgroundLayers: rest.backgroundLayers ?? above(rest.thresholds.length + 1, rest.layerHeightMm) } }
           return { ...fix(s), configs: Object.fromEntries(Object.entries(s.configs ?? {}).map(([k, v]) => [k, fix(v)])) }
         },
         partialize: ({ images: _i, editLevel: _e, strokes: _s, ...rest }) => rest, // params + index + configs + autogen + tab; images (and their freeze) live in IndexedDB

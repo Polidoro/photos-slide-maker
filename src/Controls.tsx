@@ -5,8 +5,11 @@ import { Tooltip } from "react-tooltip";
 import "react-tooltip/dist/react-tooltip.css";
 import { downloadBlob } from "./download";
 import { fit, gridSize, quantizedImage, sampleHeights } from "./image";
-import { buildStl } from "./stl";
-import { DEFAULTS, isParams, pickParams, selectImage, useStore, type Params } from "./store";
+import { buildMesh, encodeStl } from "./stl";
+import { encode3mf } from "./threemf";
+import { DEFAULTS, isParams, pickParams, selectImage, useStore, type Format, type Params } from "./store";
+
+const encode = (mesh: number[], format: Format) => (format === "3mf" ? encode3mf(mesh) : Promise.resolve(encodeStl(mesh)));
 
 const inputCls =
   "rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800";
@@ -107,7 +110,10 @@ export function Controls() {
   const future = useZustand(useStore.temporal, (t) => t.futureStates);
   const autogen = useStore((s) => s.autogen);
   const setAutogen = useStore((s) => s.setAutogen);
-  const [stl, setStl] = useState<ArrayBuffer | null>(null);
+  const format = useStore((s) => s.format);
+  const setFormat = useStore((s) => s.setFormat);
+  const [mesh, setMesh] = useState<number[] | null>(null);
+  const [file, setFile] = useState<ArrayBuffer | null>(null);
 
   const bitmap = img?.bitmap;
   const freeze = img?.freeze ?? null;
@@ -118,18 +124,23 @@ export function Controls() {
   const build = useCallback(() => {
     const g = ++gen.current;
     setBusy(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       const st = useStore.getState(), cur = selectImage(st);
       if (g !== gen.current || !cur) return;
       const s = sampleHeights(cur.bitmap, pickParams(st), cur.freeze, st.flipDepth);
-      setStl(buildStl(s.heights, s.w, s.h, s.opts));
+      const m = buildMesh(s.heights, s.w, s.h, s.opts);
+      const f = await encode(m, st.format);
+      if (g !== gen.current) return;
+      setMesh(m);
+      setFile(f);
       setBusy(false);
     }, 0);
   }, []);
   // Drop the cached mesh after a committed param change (never mid-drag) or an image switch; rebuild if Autogenerate is on.
   useEffect(() => {
     gen.current++;
-    setStl(null);
+    setMesh(null);
+    setFile(null);
     setBusy(false);
     if (!bitmap || !autogen) return;
     const id = setTimeout(build, 150);
@@ -171,16 +182,16 @@ export function Controls() {
         label="Median"
         help="Replaces each pixel with the median of its neighbourhood. Removes speckle and grain before the image is split into layers, while keeping hard edges. Value is the window radius as a share of the image size."
         param="median"
-        max={10}
-        step={0.01}
+        max={5}
+        step={0.05}
         unit="%"
       />
       <Slider
         label="Bilateral"
         help="Averages each pixel with nearby pixels of similar brightness only. Smooths gradients and noise in flat areas without blurring across edges. Value is the radius; use Edge tolerance to set what counts as an edge."
         param="bilateral"
-        max={100}
-        step={1}
+        max={20}
+        step={0.5}
         unit="%"
       />
       {bilateral > 0 && (
@@ -189,7 +200,7 @@ export function Controls() {
           help="How different in brightness a neighbour must be before the bilateral filter treats it as across an edge and ignores it. Lower keeps more detail; higher smooths more aggressively."
           param="edgeTolerance"
           min={1}
-          max={50}
+          max={25}
           step={1}
           unit="%"
         />
@@ -198,15 +209,15 @@ export function Controls() {
         label="Band tolerance"
         help="Dead band around each level boundary. Pixels within this distance of a boundary join the upper level only where they touch an area clearly above it. Stops noise near a boundary from flickering between two layers."
         param="hysteresis"
-        max={20}
-        step={0.5}
+        max={10}
+        step={0.25}
         unit="%"
       />
       <Slider
         label="Min feature"
         help="Removes islands and fills holes narrower than this size, per layer, so the print has no specks smaller than the nozzle can reproduce. Measured in millimetres at the chosen Width."
         param="minFeatureMm"
-        max={5}
+        max={2}
         step={0.01}
         unit=" mm"
       />
@@ -214,8 +225,8 @@ export function Controls() {
         label="Outline smoothing"
         help="Rounds the outline of each layer after cleanup, like sanding the corners. Smooths each layer's shape without creating new intermediate layers. Value is the blur radius as a share of the image size."
         param="smoothing"
-        max={10}
-        step={0.01}
+        max={5}
+        step={0.05}
         unit="%"
       />
       <label className="flex flex-col gap-1 text-sm">
@@ -282,6 +293,25 @@ export function Controls() {
             }}
           />
         </label>
+        <label className="flex flex-col gap-1 text-sm">
+          Format
+          <select
+            value={format}
+            onChange={(e) => {
+              const f = e.target.value as Format;
+              setFormat(f);
+              if (!mesh) return;
+              // re-encode the cached mesh instead of rebuilding it
+              const g = gen.current;
+              setFile(null);
+              encode(mesh, f).then((out) => g === gen.current && setFile(out));
+            }}
+            className={inputCls}
+          >
+            <option value="stl">STL</option>
+            <option value="3mf">3MF</option>
+          </select>
+        </label>
       </div>
       <div className="flex gap-2">
         <label className="flex flex-1 flex-col gap-1 text-sm">
@@ -318,15 +348,15 @@ export function Controls() {
           {w}×{h}
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {stl ? `${(stl.byteLength / 1e6).toFixed(1)} MB` : "…"}
+          {file ? `${(file.byteLength / 1e6).toFixed(1)} MB` : "…"}
         </p>
       </div>
       <button
-        disabled={busy || (autogen && !stl)}
-        onClick={() => (stl ? downloadBlob(stl, stem + ".stl") : build())}
+        disabled={busy || (autogen && !file)}
+        onClick={() => (file ? downloadBlob(file, `${stem}.${format}`) : build())}
         className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
       >
-        {stl ? "Download STL" : busy || autogen ? "Generating…" : "Generate STL"}
+        {file ? `Download ${format.toUpperCase()}` : busy || autogen || mesh ? "Generating…" : `Generate ${format.toUpperCase()}`}
       </button>
       <div className="flex justify-between text-sm">
         <label className="flex items-center gap-2">

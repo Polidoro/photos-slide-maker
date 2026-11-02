@@ -15,7 +15,7 @@ type V = { x: number; y: number; v: number; e: number; k: number } // e: origina
  * vertices, walls and border bands; their outline edges are chained into rings per level and each
  * terrace is triangulated once as a polygon with holes (earcut), so flat areas cost no triangles.
  */
-function buildMesh(heights: Float32Array, w: number, h: number, { widthMm, heightMm, maxHeightMm, baseMm, thresholds }: Opts): number[] {
+export function buildMesh(heights: Float32Array, w: number, h: number, { widthMm, heightMm, maxHeightMm, baseMm, thresholds }: Opts): number[] {
   const steps = thresholds.length
   const s = widthMm / (w - 1)
   const sy = heightMm ? heightMm / (h - 1) : s
@@ -113,8 +113,10 @@ function buildMesh(heights: Float32Array, w: number, h: number, { widthMm, heigh
   return out
 }
 
-export function buildStl(heights: Float32Array, w: number, h: number, opts: Opts): ArrayBuffer {
-  const m = buildMesh(heights, w, h, opts)
+export const buildStl = (heights: Float32Array, w: number, h: number, opts: Opts) => encodeStl(buildMesh(heights, w, h, opts))
+
+/** Binary STL from a flat triangle list (9 floats per triangle, outward winding). */
+export function encodeStl(m: number[]): ArrayBuffer {
   const tris = m.length / 9
   const buf = new ArrayBuffer(84 + 50 * tris)
   const dv = new DataView(buf)
