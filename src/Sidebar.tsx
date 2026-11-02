@@ -56,15 +56,19 @@ function Layers() {
   useEffect(() => {
     if (!image) return;
     const id = requestAnimationFrame(() =>
-      canvases.current.forEach(
-        (c, k) =>
-          c &&
-          k < cards &&
-          drawMask(c, layerImage(image.bitmap, params, freeze, k)),
-      ),
+      canvases.current.forEach((c, k) => {
+        if (!c || k >= cards) return;
+        const mask = layerImage(image.bitmap, params, freeze, k);
+        // Unselected image layers show only the pixels that end up at this level: the layer minus the one above it.
+        if (k !== editLevel && k < layers - 1) {
+          const above = layerImage(image.bitmap, params, freeze, k + 1).data;
+          for (let i = 3; i < above.length; i += 4) if (above[i]) mask.data[i] = 0;
+        }
+        drawMask(c, mask);
+      }),
     );
     return () => cancelAnimationFrame(id);
-  }, [image, params, freeze, cards]);
+  }, [image, params, freeze, cards, layers, editLevel]);
   if (!image) return <p className="p-2 text-xs text-gray-500">No image</p>;
   const lock = (k: number, merge = false) =>
     captureFreeze(image.bitmap, params, freeze, k, merge);
